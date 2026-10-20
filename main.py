@@ -3,7 +3,7 @@ import numpy as np
 import requests
 import edge_tts
 from PIL import Image, ImageDraw, ImageFont
-from moviepy.editor import (AudioFileClip, VideoFileClip, ImageClip,
+from moviepy.editor import (AudioFileClip, VideoFileClip, ImageClip, ColorClip,
                             CompositeVideoClip, concatenate_videoclips, vfx)
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -40,11 +40,12 @@ def make_music(dur, path="bg.wav"):
 
 def add_music(voice, dur):
     m = AudioFileClip(make_music(dur + 1)).subclip(0, dur)
-    m = m.fx(afx.volumex, 0.25).fx(afx.audio_fadein, 1).fx(afx.audio_fadeout, 2)
+    m = m.fx(afx.volumex, 0.18).fx(afx.audio_fadein, 1).fx(afx.audio_fadeout, 2)
     return CompositeAudioClip([voice, m])
 
 
 W, H = 1080, 1920
+BRAND = "MIND SKETCH"
 GEMINI_KEY = os.environ["GEMINI_API_KEY"]
 # Pixabay key (the secret may still be named PEXELS_API_KEY in your repo; the code calls Pixabay)
 STOCK_KEY = os.environ.get("PIXABAY_API_KEY") or os.environ["PEXELS_API_KEY"]
@@ -70,29 +71,27 @@ CONCEPTS = [
     "framing effect", "primacy and recency effect", "IKEA effect", "fundamental attribution error",
     "curse of knowledge", "planning fallacy", "self-serving bias", "social proof",
     "reciprocity", "foot-in-the-door technique", "habit loops (cue, routine, reward)",
-    "the Zeigarnik-style 'unfinished tasks stick in your mind' feeling", "implicit first impressions",
-    "overthinking and rumination in everyday decisions", "choice overload in shopping",
+    "why unfinished tasks stay stuck in your mind", "first impressions",
+    "overthinking everyday decisions", "choice overload in shopping",
     "the false consensus effect", "the contrast effect", "the endowment effect",
     "cognitive dissonance", "the illusion of control", "optimism bias",
     "the Baader-Meinhof (frequency) illusion", "hindsight bias", "groupthink",
-    "the placebo effect in everyday life", "body language misconceptions", "why we procrastinate on easy tasks",
+    "body language misconceptions", "why we procrastinate on easy tasks",
     "why we forget why we walked into a room", "why we compare ourselves to others",
     "why we remember embarrassing moments", "why we say yes when we want to say no",
-    "why habits are hard to break", "why we love routines", "why mornings feel different from nights",
+    "why habits are hard to break", "why we love routines",
 ]
 ANGLES = [
-    "how it quietly shows up in everyday life",
+    "a relatable everyday moment where it happens to you without you noticing",
     "why the brain does this (the simple reason)",
-    "one easy way to notice it or use it in daily life",
-    "a famous, well-documented example everyone can relate to",
+    "one easy trick to notice it or use it in daily life",
     "a surprising thing most people get wrong about it",
 ]
 HOOKS = [
-    "start by speaking directly to the viewer ('You...')",
-    "start with a relatable everyday situation",
-    "start with a question the viewer cannot answer",
-    "start by stating the strangest part directly",
-    "start with a surprising truth about the viewer's own brain",
+    "start by describing a very specific relatable moment ('You open your phone to check one thing...')",
+    "start by telling the viewer something they do without knowing it ('You do this every single day...')",
+    "start with a bold, slightly provocative statement about the viewer's own brain",
+    "start with a question the viewer instantly says 'yes' to in their head",
 ]
 
 
@@ -142,36 +141,71 @@ Return ONLY JSON: {{"accurate": true or false, "confidence": 1-10, "issue": "sho
     return gemini_json(prompt, temperature=0.0)
 
 
+def parse_scenes(meta):
+    """Validate the scenes returned by Gemini and build the full script. Returns None if unusable."""
+    scenes = meta.get("scenes")
+    if not isinstance(scenes, list) or not (4 <= len(scenes) <= 8):
+        return None
+    clean = []
+    for s in scenes:
+        if not isinstance(s, dict):
+            return None
+        line = str(s.get("line", "")).strip()
+        kw = str(s.get("keyword", "")).strip()
+        if not line or not kw:
+            return None
+        clean.append({"line": line, "keyword": kw})
+    script = " ".join(s["line"] for s in clean)
+    wc = len(script.split())
+    if not (60 <= wc <= 115):
+        return None
+    meta["scenes"] = clean
+    meta["script"] = script
+    return meta
+
+
 def make_script():
     concept = pick_concept()
     angle = random.choice(ANGLES)
     hook = random.choice(HOOKS)
     titles = [l.split(SEP)[0] for l in read_lines(HISTORY, 150)]
-    prompt = f"""You are the calm, friendly narrator of a YouTube Shorts channel called Mind Sketch that explains everyday psychology in simple words.
+    prompt = f"""You write viral-quality YouTube Shorts for the channel Mind Sketch, which explains everyday psychology in simple, warm, human words.
 Concept: {concept}. Angle: {angle}. Hook style: {hook}.
-Sound like a real person talking to a friend: simple words, contractions, a little warmth or humor. Never sound like a textbook or a robot.
-Write ONE interesting and TRUE short video about this concept. Do NOT repeat these titles: {titles}.
-STRICT RULES: only well-established, widely taught psychology. Speak in general terms ("often", "tends to", "most people"), never "studies prove".
+Voice: a smart, calm friend talking to ONE person ('you'). Contractions, short sentences, a little humor or wonder. Never a textbook, never a robot.
+Structure (it must keep people watching to the end):
+1) HOOK, max 9 words, creates curiosity or recognition in the first 2 seconds. Never start with 'Did you know'.
+2) Name the concept simply, then explain WHY it happens in plain words.
+3) One concrete everyday example the viewer instantly recognizes.
+4) One tiny practical takeaway.
+5) LAST line: a question about THIS concept that people want to answer in the comments (it must connect to the topic).
+Do NOT repeat these titles: {titles}.
+STRICT RULES: only well-established, widely taught psychology. Use general language ('often', 'tends to', 'most people'), never 'studies prove'.
 No exact percentages or statistics. No diagnoses, no mental illnesses (no depression, anxiety disorders, ADHD, trauma, etc.), no therapy or treatment advice, no medical claims, no disputed findings.
+Split the narration into 5 or 6 SCENES. Each scene has the exact words the narrator says (8-20 words) and a stock-footage search phrase showing what the viewer should SEE during those words.
+Visual keywords: 2-5 words, a concrete filmable scene (a person, place or object doing something), e.g. 'woman scrolling phone bed', 'crowd crossing street', 'man staring window rain', 'coffee cup desk morning'. Vary the shots. No abstract words (psychology, bias, brain, mind). No text, logos or famous people.
+Total narration 80-100 words.
 Return ONLY JSON with this shape:
-{{"title": "curiosity-driven title, max 70 chars, in the style of 'Why You Procrastinate Even When You Know Better' or 'The Reason You Keep Replaying Embarrassing Moments'",
-"script": "70-85 words. The FIRST sentence is a punchy hook of max 10 words aimed at 'you' (never start with 'Did you know'). Short sentences. Include one tiny, practical takeaway. End with a question that makes people comment. No emojis.",
-"keywords": ["4 English phrases to search stock footage showing concrete, visible scenes that match the mood, for example: woman thinking by window, man typing on laptop at night, crowd walking in city, rain on window. No abstract words like psychology, bias or brain"],
+{{"title": "curiosity-driven title, max 70 chars, like 'Why You Procrastinate Even When You Know Better'",
+"scenes": [{{"line": "narration words", "keyword": "visual search phrase"}}],
 "tags": ["6 to 8 tags: always include psychology facts, psychology, human behavior, mind, did you know, plus the specific concept name"]}}"""
-    for attempt in range(6):
+    for attempt in range(8):
         meta = gemini_json(prompt)
+        meta = parse_scenes(meta)
+        if not meta:
+            print("Bad structure, regenerating")
+            continue
         check = fact_check(meta)
         print("Fact-check:", check)
         if check.get("accurate") is True and check.get("confidence", 0) >= 8:
             meta["concept"] = concept
             return meta
         print("Rejected, regenerating:", meta.get("title"))
-    raise RuntimeError("No script passed the fact-check")
+    raise RuntimeError("No script passed the structure and fact checks")
 
 
 async def _tts(text, path):
     try:
-        await edge_tts.Communicate(text, VOICE, rate="+0%").save(path)
+        await edge_tts.Communicate(text, VOICE, rate="+4%").save(path)
     except Exception as e:
         print("edge-tts failed, using gTTS:", e)
         from gtts import gTTS
@@ -234,6 +268,13 @@ def fit(clip, dur):
     return clip.subclip(0, dur)
 
 
+def scene_durations(scenes, total):
+    """Split the total duration between scenes in proportion to the words narrated in each."""
+    words = [max(len(s["line"].split()), 1) for s in scenes]
+    s = sum(words)
+    return [total * w / s for w in words]
+
+
 def _font(size):
     for p in FONT_PATHS:
         if os.path.exists(p):
@@ -242,7 +283,7 @@ def _font(size):
 
 
 def _caption_image(text):
-    font = _font(72)
+    font = _font(76)
     img = Image.new("RGBA", (W, 420), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     lines, line = [], ""
@@ -255,32 +296,45 @@ def _caption_image(text):
             line = test
     if line:
         lines.append(line)
-    lh = 90
+    lh = 94
     y = (420 - lh * len(lines)) // 2
     for ln in lines:
         tw = d.textlength(ln, font=font)
         d.text(((W - tw) / 2, y), ln, font=font, fill=(255, 255, 255, 255),
-               stroke_width=6, stroke_fill=(0, 0, 0, 255))
+               stroke_width=7, stroke_fill=(0, 0, 0, 255))
         y += lh
     return np.array(img)
 
 
+def _brand_image():
+    font = _font(44)
+    img = Image.new("RGBA", (W, 90), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    tw = d.textlength(BRAND, font=font)
+    d.text(((W - tw) / 2, 20), BRAND, font=font, fill=(255, 159, 28, 235),
+           stroke_width=3, stroke_fill=(0, 0, 0, 200))
+    return np.array(img)
+
+
 def add_subs(video, text, dur):
-    """English captions (same language as the voice), 3-4 words at a time."""
+    """English captions (same language as the voice), 3-4 words at a time, plus a small brand tag."""
     try:
         words = text.split()
-        parts = [" ".join(words[i:i + 4]) for i in range(0, len(words), 4)]
+        parts = [" ".join(words[i:i + 3]) for i in range(0, len(words), 3)]
         total = sum(len(p) for p in parts)
         t = 0.0
-        subs = []
+        layers = [video]
+        # soft dark layer so the white captions stay readable on any footage
+        layers.append(ColorClip((W, H), color=(0, 0, 0)).set_opacity(0.22).set_duration(video.duration))
+        layers.append(ImageClip(_brand_image()).set_duration(video.duration).set_position(("center", 150)))
         for p in parts:
             d = dur * len(p) / total
             c = (ImageClip(_caption_image(p))
                  .set_start(t).set_duration(d)
-                 .set_position(("center", 1100)))
-            subs.append(c)
+                 .set_position(("center", 1080)))
+            layers.append(c)
             t += d
-        out = CompositeVideoClip([video] + subs).set_duration(video.duration)
+        out = CompositeVideoClip(layers).set_duration(video.duration)
         return out.set_audio(video.audio)
     except Exception as e:
         print("Subtitles skipped:", e)
@@ -290,17 +344,19 @@ def add_subs(video, text, dur):
 def build_video(meta):
     asyncio.run(_tts(meta["script"], "voice.mp3"))
     audio = AudioFileClip("voice.mp3")
-    total = audio.duration + 0.5
+    total = audio.duration + 0.6
     used = set(read_lines(USED_CLIPS, 2000))
-    paths = []
-    for i, k in enumerate(meta["keywords"]):
-        p = safe_clip(k, i, used) or safe_clip("person thinking", i, used)
-        if p:
-            paths.append(p)
-    if not paths:
+    scenes = meta["scenes"]
+    durs = scene_durations(scenes, total)
+    clips, last_path = [], None
+    for i, (sc, d) in enumerate(zip(scenes, durs)):
+        p = safe_clip(sc["keyword"], i, used) or safe_clip("person thinking", i, used) or last_path
+        if not p:
+            continue
+        last_path = p
+        clips.append(fit(VideoFileClip(p), max(d, 1.5)))
+    if not clips:
         raise RuntimeError("No stock clips found")
-    seg = total / len(paths)
-    clips = [fit(VideoFileClip(p), seg) for p in paths]
     video = concatenate_videoclips(clips).set_audio(add_music(audio, total))
     video = add_subs(video, meta["script"], audio.duration)
     video.write_videofile("out.mp4", fps=24, codec="libx264", audio_codec="aac",
