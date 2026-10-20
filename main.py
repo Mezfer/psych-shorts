@@ -108,7 +108,7 @@ def pick_concept():
     return random.choice(fresh or CONCEPTS)
 
 
-def gemini_json(prompt, temperature=1.0):
+def gemini_json(prompt, temperature=0.9):
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json", "temperature": temperature},
@@ -116,29 +116,49 @@ def gemini_json(prompt, temperature=1.0):
     last_err = None
     for model in MODELS:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        r = requests.post(url, headers={"x-goog-api-key": GEMINI_KEY}, json=body, timeout=120)
-        if r.status_code == 200:
-            parts = r.json()["candidates"][0]["content"]["parts"]
-            text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
-            print("Model used:", model)
-            return json.loads(text)
-        last_err = f"{model}: {r.status_code} {r.text[:200]}"
+        try:
+            r = requests.post(url, headers={"x-goog-api-key": GEMINI_KEY}, json=body, timeout=120)
+            if r.status_code == 200:
+                parts = r.json()["candidates"][0]["content"]["parts"]
+                text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+                out = json.loads(text)
+                print("Model used:", model)
+                return out
+            last_err = f"{model}: {r.status_code} {r.text[:200]}"
+        except Exception as e:
+            last_err = f"{model}: {type(e).__name__}: {e}"
         print("Model failed ->", last_err)
     raise RuntimeError("All Gemini models failed. Last: " + str(last_err))
 
 
 def fact_check(meta):
-    prompt = f"""You are a strict psychology fact-checker. Check this short video script.
+    prompt = f"""You are a strict, skeptical psychology editor who checks short video scripts for accuracy before publishing.
 Title: {meta['title']}
 Script: {meta['script']}
-Mark accurate=false if the MAIN claim is clearly false, overstated, or relies on a finding that is disputed
-or failed to replicate (examples: power posing, ego depletion, learning styles, left-brain/right-brain, 10% of the brain,
-Mozart effect, 'studies prove' with exact percentages). Also mark accurate=false if the script diagnoses people, mentions
-mental illnesses, gives therapy or treatment advice, or makes medical claims.
-Accept well-established, widely taught concepts described in a general, hedged way ("often", "tends to").
-"confidence" = how sure you are (1-10) that the script is accurate and safe. Use 8 or more only when you are sure.
-Return ONLY JSON: {{"accurate": true or false, "confidence": 1-10, "issue": "short reason"}}"""
+Do these checks:
+1) NAME: is the named concept a real, standard concept that psychology textbooks teach under that name?
+2) MECHANISM: write the standard textbook explanation of why it happens, then judge whether the script's explanation matches it.
+   Mark mechanism_ok=false if the script gives a simplified or invented cause (for example 'your brain is lazy', 'your brain is wired to...', 'hardwired',
+   evolution or brain-region claims that are not firmly established) or a pop-psychology metaphor presented as the scientific reason.
+3) CLAIMS: mark accurate=false if the main claim is false, overstated, disputed, or failed to replicate (power posing, ego depletion, learning styles,
+   left-brain/right-brain, 10% of the brain, Mozart effect, decision fatigue as a proven law, 'studies prove', exact percentages).
+4) SAFETY: mark safe=false if it diagnoses, mentions mental illnesses, gives therapy, treatment or medical advice.
+Hedged, general wording ('often', 'tends to', 'most people') is fine. Be strict: when unsure, fail the check.
+"confidence" = how sure you are (1-10) that the script is accurate and safe to publish. Use 8 or more only when you are certain.
+Return ONLY JSON: {{"concept_ok": true or false, "mechanism_ok": true or false, "accurate": true or false, "safe": true or false, "confidence": 1-10, "issue": "short reason"}}"""
     return gemini_json(prompt, temperature=0.0)
+
+
+def passes_check(check):
+    return (check.get("accurate") is True and check.get("safe") is True
+            and check.get("mechanism_ok") is True and check.get("concept_ok") is True
+            and check.get("confidence", 0) >= 8)
+
+
+BANNED = ["depress", "anxiety", "adhd", "trauma", "disorder", "therapy", "therapist", "diagnos", "cure",
+          "treatment", "medication", "suicid", "self-harm", "ptsd", "bipolar", "schizo", "autis", "ocd",
+          "mental illness", "mental health", "lazy", "wired to", "hardwired", "hard-wired", "studies prove",
+          "science proves", "proven"]
 
 
 def parse_scenes(meta):
@@ -157,8 +177,24 @@ def parse_scenes(meta):
         clean.append({"line": line, "keyword": kw})
     script = " ".join(s["line"] for s in clean)
     wc = len(script.split())
-    if not (60 <= wc <= 115):
+    if not (70 <= wc <= 115):
         return None
+    low = script.lower() + " " + str(meta.get("title", "")).lower()
+    if any(w in low for w in BANNED):
+        print("Rejected by banned-word filter")
+        return None
+    first_sentence = clean[0]["line"].replace("?", ".").replace("!", ".").split(".")[0]
+    if len(first_sentence.split()) > 12:
+        print("Rejected: hook too long")
+        return None
+    if not clean[-1]["line"].rstrip().endswith("?"):
+        print("Rejected: last line is not a question")
+        return None
+    meta["title"] = str(meta.get("title", "")).strip().strip('"').strip()[:70]
+    if not meta["title"]:
+        return None
+    tags = meta.get("tags")
+    meta["tags"] = [str(t)[:30] for t in tags][:10] if isinstance(tags, list) and tags else ["psychology facts", "psychology"]
     meta["scenes"] = clean
     meta["script"] = script
     return meta
@@ -180,6 +216,8 @@ Structure (it must keep people watching to the end):
 5) LAST line: a question about THIS concept that people want to answer in the comments (it must connect to the topic).
 Do NOT repeat these titles: {titles}.
 STRICT RULES: only well-established, widely taught psychology. Use general language ('often', 'tends to', 'most people'), never 'studies prove'.
+Explain WHY it happens using the standard textbook explanation in plain words. Do NOT invent causes and do NOT use metaphors as the cause
+(never 'your brain is lazy', 'wired to', 'hardwired', 'tricks you'). No evolution or brain-region claims unless they are firmly established.
 No exact percentages or statistics. No diagnoses, no mental illnesses (no depression, anxiety disorders, ADHD, trauma, etc.), no therapy or treatment advice, no medical claims, no disputed findings.
 Split the narration into 5 or 6 SCENES. Each scene has the exact words the narrator says (8-20 words) and a stock-footage search phrase showing what the viewer should SEE during those words.
 Visual keywords: 2-5 words, a concrete filmable scene (a person, place or object doing something), e.g. 'woman scrolling phone bed', 'crowd crossing street', 'man staring window rain', 'coffee cup desk morning'. Vary the shots. No abstract words (psychology, bias, brain, mind). No text, logos or famous people.
@@ -196,7 +234,7 @@ Return ONLY JSON with this shape:
             continue
         check = fact_check(meta)
         print("Fact-check:", check)
-        if check.get("accurate") is True and check.get("confidence", 0) >= 8:
+        if passes_check(check):
             meta["concept"] = concept
             return meta
         print("Rejected, regenerating:", meta.get("title"))
@@ -212,13 +250,22 @@ async def _tts(text, path):
         gTTS(text, lang="en").save(path)
 
 
-def get_clip(query, i, used):
-    r = requests.get(
-        "https://pixabay.com/api/videos/",
-        params={"key": STOCK_KEY, "q": query, "per_page": 30, "safesearch": "true"},
-        timeout=30,
-    )
+def _get_with_retry(url, params, tries=3):
+    import time
+    for k in range(tries):
+        r = requests.get(url, params=params, timeout=30)
+        if r.status_code in (429, 500, 502, 503, 504) and k < tries - 1:
+            time.sleep(3 * (k + 1))
+            continue
+        r.raise_for_status()
+        return r
     r.raise_for_status()
+    return r
+
+
+def get_clip(query, i, used):
+    r = _get_with_retry("https://pixabay.com/api/videos/",
+                        {"key": STOCK_KEY, "q": query, "per_page": 40, "safesearch": "true"})
     hits = [h for h in r.json().get("hits", []) if str(h.get("id")) not in used]
     random.shuffle(hits)
     words = [w for w in query.lower().split() if len(w) > 2]
@@ -359,8 +406,9 @@ def build_video(meta):
         raise RuntimeError("No stock clips found")
     video = concatenate_videoclips(clips).set_audio(add_music(audio, total))
     video = add_subs(video, meta["script"], audio.duration)
-    video.write_videofile("out.mp4", fps=24, codec="libx264", audio_codec="aac",
-                          preset="ultrafast", threads=2, logger=None)
+    video.write_videofile("out.mp4", fps=30, codec="libx264", audio_codec="aac",
+                          audio_bitrate="192k", preset="veryfast", threads=2, logger=None,
+                          ffmpeg_params=["-crf", "19", "-pix_fmt", "yuv420p", "-movflags", "+faststart"])
     return "out.mp4"
 
 
@@ -400,9 +448,18 @@ def upload(path, meta, creds):
         part="snippet,status", body=body,
         media_body=MediaFileUpload(path, chunksize=-1, resumable=True),
     )
-    resp = None
+    import time
+    from googleapiclient.errors import HttpError
+    resp, tries = None, 0
     while resp is None:
-        _, resp = req.next_chunk()
+        try:
+            _, resp = req.next_chunk()
+        except HttpError as e:
+            tries += 1
+            if e.resp.status in (500, 502, 503, 504) and tries < 4:
+                time.sleep(5 * tries)
+                continue
+            raise
     print("Uploaded:", resp["id"])
 
 
