@@ -1,0 +1,50 @@
+name: Psych Daily Short
+
+on:
+  schedule:
+    # 2 videos a day (13:11 and 19:37 UTC). Keeps you inside the YouTube API daily quota
+    # if this channel and Tom Facts share the same Google Cloud project.
+    - cron: "11 13 * * *"
+    - cron: "37 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: psych-short
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Create and upload video
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+        run: python main.py
+
+      - name: Save history
+        if: always()
+        run: |
+          git config user.name "psych-bot"
+          git config user.email "psych-bot@users.noreply.github.com"
+          git add history.txt || true
+          git add used_clips.txt || true
+          git commit -m "update history" || exit 0
+          git pull --rebase
+          git push
