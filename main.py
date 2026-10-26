@@ -1,4 +1,4 @@
-import os, json, random, asyncio
+import os, json, random, asyncio, csv, re, datetime
 import numpy as np
 import requests
 import edge_tts
@@ -56,6 +56,7 @@ VOICE = os.environ.get("VOICE", "en-US-AriaNeural")
 PRIVACY = os.environ.get("PRIVACY", "public")
 HISTORY = "history.txt"
 USED_CLIPS = "used_clips.txt"
+LOG = "log.csv"
 SEP = " || "
 FONT_PATHS = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -161,6 +162,46 @@ BANNED = ["depress", "anxiety", "adhd", "trauma", "disorder", "therapy", "therap
           "science proves", "proven"]
 
 
+def hook_of(meta):
+    first = meta["scenes"][0]["line"].strip()
+    return re.split(r"(?<=[.!?])\s", first)[0]
+
+
+def recent_hooks(n=60):
+    out = []
+    for l in read_lines(HISTORY, n):
+        parts = l.split(SEP)
+        if len(parts) > 2:
+            out.append(parts[2])
+    return out
+
+
+def _tokens(t):
+    return set(re.findall(r"[a-z']+", t.lower()))
+
+
+def score_idea(meta):
+    """Simple rule-based quality score (0-8). It checks craft rules only; it does not predict views."""
+    pts, hook = 0, hook_of(meta)
+    hw = len(hook.split())
+    pts += hw <= 9                                            # short hook
+    pts += bool(re.search(r"\b(you|your|you're)\b", hook.lower()) or hook.endswith("?"))  # speaks to the viewer
+    pts += 62 <= len(meta["script"].split()) <= 92            # tight length
+    kws = [s["keyword"].lower() for s in meta["scenes"]]
+    pts += len(set(kws)) == len(kws)                          # varied visuals
+    pts += all(2 <= len(k.split()) <= 5 for k in kws)         # concrete, filmable keywords
+    abstract = ("psycholog", "bias", "brain", "mind", "concept")
+    pts += not any(a in k for k in kws for a in abstract)     # no abstract footage searches
+    pts += meta["scenes"][-1]["line"].rstrip().endswith("?")  # comment-driving ending
+    old = [_tokens(h) for h in recent_hooks()]
+    new = _tokens(hook)
+    pts += not any(new and len(new & o) / len(new | o) > 0.5 for o in old)  # distinct from recent hooks
+    return pts
+
+
+MIN_SCORE = 7
+
+
 def parse_scenes(meta):
     """Validate the scenes returned by Gemini and build the full script. Returns None if unusable."""
     scenes = meta.get("scenes")
@@ -177,7 +218,7 @@ def parse_scenes(meta):
         clean.append({"line": line, "keyword": kw})
     script = " ".join(s["line"] for s in clean)
     wc = len(script.split())
-    if not (70 <= wc <= 115):
+    if not (62 <= wc <= 100):
         return None
     low = script.lower() + " " + str(meta.get("title", "")).lower()
     if any(w in low for w in BANNED):
@@ -205,6 +246,7 @@ def make_script():
     angle = random.choice(ANGLES)
     hook = random.choice(HOOKS)
     titles = [l.split(SEP)[0] for l in read_lines(HISTORY, 150)]
+    hooks = recent_hooks()
     prompt = f"""You write viral-quality YouTube Shorts for the channel Mind Sketch, which explains everyday psychology in simple, warm, human words.
 Concept: {concept}. Angle: {angle}. Hook style: {hook}.
 Voice: a smart, calm friend talking to ONE person ('you'). Contractions, short sentences, a little humor or wonder. Never a textbook, never a robot.
@@ -213,15 +255,15 @@ Structure (it must keep people watching to the end):
 2) Name the concept simply, then explain WHY it happens in plain words.
 3) One concrete everyday example the viewer instantly recognizes.
 4) One tiny practical takeaway.
-5) LAST line: a question about THIS concept that people want to answer in the comments (it must connect to the topic).
-Do NOT repeat these titles: {titles}.
+5) LAST line: a question about THIS concept that people want to answer in the comments. It should echo the opening idea so the video loops naturally when it replays.
+Do NOT repeat these titles: {titles}. Do NOT open like these recent hooks: {hooks}.
 STRICT RULES: only well-established, widely taught psychology. Use general language ('often', 'tends to', 'most people'), never 'studies prove'.
 Explain WHY it happens using the standard textbook explanation in plain words. Do NOT invent causes and do NOT use metaphors as the cause
 (never 'your brain is lazy', 'wired to', 'hardwired', 'tricks you'). No evolution or brain-region claims unless they are firmly established.
 No exact percentages or statistics. No diagnoses, no mental illnesses (no depression, anxiety disorders, ADHD, trauma, etc.), no therapy or treatment advice, no medical claims, no disputed findings.
 Split the narration into 5 or 6 SCENES. Each scene has the exact words the narrator says (8-20 words) and a stock-footage search phrase showing what the viewer should SEE during those words.
 Visual keywords: 2-5 words, a concrete filmable scene (a person, place or object doing something), e.g. 'woman scrolling phone bed', 'crowd crossing street', 'man staring window rain', 'coffee cup desk morning'. Vary the shots. No abstract words (psychology, bias, brain, mind). No text, logos or famous people.
-Total narration 80-100 words.
+Total narration 70-90 words (about 30 seconds). Cut every sentence that does not move the story forward.
 Return ONLY JSON with this shape:
 {{"title": "curiosity-driven title, max 70 chars, like 'Why You Procrastinate Even When You Know Better'",
 "scenes": [{{"line": "narration words", "keyword": "visual search phrase"}}],
@@ -231,6 +273,11 @@ Return ONLY JSON with this shape:
         meta = parse_scenes(meta)
         if not meta:
             print("Bad structure, regenerating")
+            continue
+        sc = score_idea(meta)
+        print("Idea score:", sc, "/ 8 | hook:", hook_of(meta))
+        if sc < MIN_SCORE:
+            print("Rejected: idea score too low, regenerating")
             continue
         check = fact_check(meta)
         print("Fact-check:", check)
@@ -363,6 +410,16 @@ def _brand_image():
     return np.array(img)
 
 
+def _cta_image(text="Follow for daily psychology"):
+    font = _font(52)
+    img = Image.new("RGBA", (W, 110), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    tw = d.textlength(text, font=font)
+    d.text(((W - tw) / 2, 20), text, font=font, fill=(255, 255, 255, 255),
+           stroke_width=5, stroke_fill=(0, 0, 0, 255))
+    return np.array(img)
+
+
 def add_subs(video, text, dur):
     """English captions (same language as the voice), 3-4 words at a time, plus a small brand tag."""
     try:
@@ -374,6 +431,9 @@ def add_subs(video, text, dur):
         # soft dark layer so the white captions stay readable on any footage
         layers.append(ColorClip((W, H), color=(0, 0, 0)).set_opacity(0.22).set_duration(video.duration))
         layers.append(ImageClip(_brand_image()).set_duration(video.duration).set_position(("center", 150)))
+        if video.duration > 6:  # small, non-pushy follow reminder in the last seconds
+            layers.append(ImageClip(_cta_image()).set_start(video.duration - 2.2)
+                          .set_duration(2.2).set_position(("center", 1500)))
         for p in parts:
             d = dur * len(p) / total
             c = (ImageClip(_caption_image(p))
@@ -409,6 +469,7 @@ def build_video(meta):
     video.write_videofile("out.mp4", fps=30, codec="libx264", audio_codec="aac",
                           audio_bitrate="192k", preset="veryfast", threads=2, logger=None,
                           ffmpeg_params=["-crf", "19", "-pix_fmt", "yuv420p", "-movflags", "+faststart"])
+    meta["audio_sec"] = round(audio.duration, 1)
     return "out.mp4"
 
 
@@ -470,4 +531,16 @@ if __name__ == "__main__":
     video_path = build_video(meta)
     upload(video_path, meta, creds)
     with open(HISTORY, "a", encoding="utf-8") as f:
-        f.write(meta["title"] + SEP + meta["concept"] + "\n")
+        f.write(meta["title"] + SEP + meta["concept"] + SEP + hook_of(meta) + "\n")
+    try:  # one row per video; fill the last 4 columns by hand from YouTube Studio
+        new = not os.path.exists(LOG)
+        with open(LOG, "a", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            if new:
+                w.writerow(["date", "title", "concept", "hook", "words", "audio_sec", "scenes", "idea_score",
+                            "views", "viewed_vs_swiped_pct", "avg_view_pct", "subs_gained"])
+            w.writerow([datetime.date.today().isoformat(), meta["title"], meta["concept"], hook_of(meta),
+                        len(meta["script"].split()), meta.get("audio_sec", ""), len(meta["scenes"]),
+                        score_idea(meta), "", "", "", ""])
+    except Exception as e:
+        print("Log skipped:", e)
