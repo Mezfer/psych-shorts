@@ -433,7 +433,7 @@ def add_subs(video, text, dur):
         layers.append(ImageClip(_brand_image()).set_duration(video.duration).set_position(("center", 150)))
         if video.duration > 6:  # small, non-pushy follow reminder in the last seconds
             layers.append(ImageClip(_cta_image()).set_start(video.duration - 2.2)
-                          .set_duration(2.2).set_position(("center", 1500)))
+                          .set_duration(2.2).set_position(("center", 250)))
         for p in parts:
             d = dur * len(p) / total
             c = (ImageClip(_caption_image(p))
