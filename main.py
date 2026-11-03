@@ -83,14 +83,43 @@ FONT_PATHS = [
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
 ]
 
-# Guess-challenge Shorts: one surprising TRUE fact per video, stable and easy to verify.
-TOPICS = [
+# Each video uses ONE challenge format. Formats rotate (never the same one twice in a row) and, once you have
+# enough results in log.csv, formats that hold viewers better are picked a bit more often.
+SUBJECTS = [
     "animals and their abilities", "the human body (general facts only, no medical advice)",
-    "space and planets", "world geography and famous landmarks", "food and drinks around the world",
-    "famous inventions and who made them", "oceans and sea creatures", "weather and natural phenomena",
-    "everyday objects and how they work", "sports facts that never change", "big numbers and sizes of famous things",
-    "birds and insects", "mountains, deserts and rivers", "how things are made",
+    "space and planets", "food and drinks around the world", "famous inventions and who made them",
+    "oceans and sea creatures", "weather and natural phenomena", "everyday objects and how they work",
+    "sports facts that never change", "big numbers and sizes of famous things", "birds and insects",
+    "mountains, deserts and rivers", "how things are made",
 ]
+FORMATS = {
+    "guess_fact": "GUESS THE ANSWER about ONE surprising fact (subject area: {sub}). The answer is short and single "
+                  "(a number, an animal, a place or an object). Example hook: 'هل تستطيع تخمين أسرع حيوان على الأرض؟'",
+    "guess_country": "GUESS THE COUNTRY from 2-3 clues (a landmark, a food, geography or the flag colors). The clues must "
+                     "point to exactly ONE country and the answer is that country. Example hook: 'خمّن الدولة من هذه الألغاز الثلاثة!'",
+    "math_riddle": "A very short MATH or LOGIC riddle that a person can solve in 5 seconds in their head (simple arithmetic "
+                   "with a small trick). The hook plus the setup must contain the COMPLETE puzzle. It must have exactly "
+                   "ONE numeric answer: put it in 'answer_number'. Example hook: 'هل تحل هذه المسألة في 5 ثوانٍ؟'",
+    "true_false": "TRUE OR FALSE: one surprising claim that is clearly TRUE, or a common myth that is clearly FALSE, "
+                  "according to well-established knowledge. The viewer decides. The answer is 'صحيح' or 'خطأ'. "
+                  "Example hook: 'صحيح أم خطأ؟ الموز ينمو على أشجار!'",
+    "what_next": "WHAT HAPPENS NEXT: a simple, safe everyday or physics situation with ONE certain, well-known outcome. "
+                 "Never something dangerous to imitate. Example hook: 'ماذا سيحدث عندما ...؟'",
+    "unusual_fact": "UNUSUAL MYSTERY: a question about a TRUE fact from nature or history that few people know, "
+                    "with a short answer. Example hook: 'هل تعرف سبب هذا الغموض؟'",
+}
+CTA_STYLES = {
+    "comment_guess": "ask what they guessed, for example 'ما هو تخمينك؟ اكتبه في التعليقات؟'",
+    "tag_friend": "challenge them to send it to a friend, for example 'هل سيعرف صديقك الإجابة؟ أرسله له الآن؟'",
+    "subscribe_next": "invite them to come back for the next challenge, for example 'هل أنت مستعد لتحدي الغد؟ اشترك الآن؟'",
+    "score_comment": "ask whether they got it right, for example 'هل أجبت بشكل صحيح؟ اكتب نعم أو لا؟'",
+    "replay": "invite them to watch again and check, for example 'هل لاحظت كل شيء؟ شاهد مرة أخرى؟'",
+}
+FORMAT_RULES = {
+    "true_false": "The claim must be clearly true or clearly false by well-established knowledge, and the declared answer must match.",
+    "guess_country": "The clues must identify exactly ONE country, with no other country possible.",
+    "math_riddle": "Solve the puzzle yourself step by step; the numeric answer must be exactly right.",
+}
 BANNED = {"اكتئاب", "قلق", "علاج", "تشخيص", "مرض", "سياسة", "الحرب", "الحروب", "الدين", "قمار", "مخدرات",
           "انتحار", "جنس", "إرهاب", "اضمن", "مضمون", "ترامب", "اسرائيل", "إسرائيل"}
 ABSTRACT = ("concept", "idea", "fact", "trivia", "quiz", "question", "answer", "challenge", "knowledge")
@@ -104,10 +133,58 @@ def read_lines(path, n):
         return [l.strip() for l in f if l.strip()][-n:]
 
 
-def pick_topic():
-    used = [l.split(SEP)[1] for l in read_lines(HISTORY, 40) if SEP in l]
-    fresh = [t for t in TOPICS if t not in used[-6:]]
-    return random.choice(fresh or TOPICS)
+LOG_HEADER = ["date", "title", "format", "subject", "hook", "cta_style", "words", "total_sec", "idea_score",
+              "video_id", "views", "viewed_vs_swiped_pct", "avg_view_pct", "likes", "comments", "subs_gained",
+              "title_alts", "pinned_comment"]
+
+
+def _num(x):
+    try:
+        return float(str(x).replace("%", "").replace(",", ".").strip())
+    except Exception:
+        return None
+
+
+def metric_rows():
+    """Rows of log.csv that you filled in by hand. Needs at least 8 rows before it is used at all."""
+    try:
+        with open(LOG, encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
+    except Exception:
+        return [], None
+    for col in ("viewed_vs_swiped_pct", "views"):
+        have = [r for r in rows if _num(r.get(col)) is not None]
+        if len(have) >= 8:
+            return have, col
+    return [], None
+
+
+def format_weights():
+    w = {k: 1.0 for k in FORMATS}
+    have, col = metric_rows()
+    if not have:
+        return w
+    mean = sum(_num(r[col]) for r in have) / len(have)
+    if mean <= 0:
+        return w
+    for k in FORMATS:
+        vals = [_num(r[col]) for r in have if r.get("format") == k]
+        if len(vals) >= 2:  # a format needs 2+ measured videos before its weight changes; weights stay in 0.5-2.0
+            w[k] = min(2.0, max(0.5, (sum(vals) / len(vals)) / mean))
+    return w
+
+
+def pick_format():
+    last = recent(1, 10)[-2:]
+    w = format_weights()
+    pool = [k for k in FORMATS if k not in last] or list(FORMATS)
+    return random.choices(pool, weights=[w[k] for k in pool])[0]
+
+
+def pick_cta_style():
+    last = recent(4, 10)[-2:]
+    pool = [k for k in CTA_STYLES if k not in last] or list(CTA_STYLES)
+    return random.choice(pool)
 
 
 def gemini_json(prompt, temperature=0.9):
@@ -133,21 +210,39 @@ def gemini_json(prompt, temperature=0.9):
     raise RuntimeError("All Gemini models failed. Last: " + str(last_err))
 
 
+def _line(meta, kind):
+    return next(s["line"] for s in meta["scenes"] if s["kind"] == kind)
+
+
 def fact_check(meta):
     prompt = f"""You are a strict fact-checker for short Arabic trivia videos. Check the facts, in any language.
+Format: {meta.get('fmt', '')}
 Title: {meta['title']}
-Question: {meta['hook']}
-Clue: {meta['setup']}
-Answer and explanation: {meta['reveal']}
-Extra fact: {meta['extra']}
+Question: {_line(meta, 'hook')}
+Clue: {_line(meta, 'setup')}
+Answer and explanation: {_line(meta, 'reveal')}
+Declared answer: {meta['answer']}
+Extra fact: {_line(meta, 'extra')}
 Checks:
-1) ANSWER: is the answer to the question correct and unambiguous (only one reasonable answer)?
+1) ANSWER: is the answer to the question correct and unambiguous (only one reasonable answer)? {FORMAT_RULES.get(meta.get('fmt'), '')}
 2) STABLE: is every claim a well-established fact that does not change over time and is not disputed? (No prices, no 'latest' records, no rankings that change.)
 3) DETAILS: are all numbers and the extra fact correct? Mark false if any number is wrong, rounded misleadingly, or unsure.
 4) SAFE: no politics, religion, medical advice, violence, gambling or sensitive claims.
 Be strict: when unsure, fail the check. "confidence" = how sure you are (1-10) that everything is correct. Use 8 or more only when certain.
 Return ONLY JSON: {{"answer_correct": true or false, "stable": true or false, "details_ok": true or false, "safe": true or false, "confidence": 1-10, "issue": "short reason"}}"""
     return gemini_json(prompt, temperature=0.0)
+
+
+def verify_math(meta):
+    """Second, independent solve of the riddle (the model does not see our answer). Numbers must match exactly."""
+    try:
+        want = float(meta.get("answer_number"))
+        out = gemini_json("Solve this puzzle carefully, step by step in your head. Question: "
+                          + _line(meta, "hook") + " " + _line(meta, "setup")
+                          + ' Return ONLY JSON: {"answer_number": number}', temperature=0.0)
+        return abs(float(out["answer_number"]) - want) < 1e-9
+    except Exception:
+        return False
 
 
 def passes_check(c):
@@ -172,6 +267,32 @@ def recent(idx, n=60):
     return out
 
 
+def best_hook(cands):
+    """Pick the strongest hook among the options by simple rules (short, a number or time limit, not like recent hooks)."""
+    old = [_tokens(h) for h in recent(2)]
+    best = None
+    for c in cands:
+        c = str(c).strip()
+        if not c or not c.endswith(("؟", "?")) or words(c) > 10:
+            continue
+        t = _tokens(c)
+        sc = (2 if re.search(r"\d|ثوان|ثانية|خمس", c) else 0) + (1 if words(c) <= 8 else 0)
+        if any(t and len(t & o) / len(t | o) > 0.5 for o in old):
+            sc -= 3
+        sc += random.random() * 0.5
+        if best is None or sc > best[0]:
+            best = (sc, c)
+    return best[1] if best else None
+
+
+def best_title(cands):
+    cs = [str(c).strip().strip('"').strip() for c in cands if str(c).strip()]
+    cs = [c for c in cs if 8 <= len(c) <= 60]
+    if not cs:
+        return ""
+    return max(cs, key=lambda c: (("؟" in c or "?" in c) + bool(re.search(r"\d|ثوان", c)) - len(c) / 200))
+
+
 def parse_meta(meta):
     """Validate Gemini's JSON and build the scene list. Returns None when unusable."""
     try:
@@ -185,13 +306,18 @@ def parse_meta(meta):
             parts[k] = {"line": line, "keyword": kw.lower()}
     except Exception:
         return None
-    title = str(meta.get("title", "")).strip().strip('"').strip()[:60]
+    opts = meta.get("hook_options")
+    opts = opts if isinstance(opts, list) else []
+    parts["hook"]["line"] = best_hook([parts["hook"]["line"]] + opts) or parts["hook"]["line"]
+    alts = meta.get("title_alts")
+    alts = [str(a) for a in alts] if isinstance(alts, list) else []
+    title = best_title([meta.get("title", "")] + alts)
     answer = str(meta.get("answer", "")).strip()
     if not title or not answer:
         return None
     narration = " ".join(parts[k]["line"] for k in ("hook", "setup", "reveal", "extra", "cta"))
     wc = words(narration)
-    if not (38 <= wc <= 85):
+    if not (34 <= wc <= 72):
         print("Rejected: length", wc)
         return None
     if _tokens(narration + " " + title) & BANNED:
@@ -218,7 +344,9 @@ def parse_meta(meta):
     meta["tags"] = ([str(t)[:30] for t in tags][:10] if isinstance(tags, list) and tags
                     else ["تحدي", "خمن", "معلومات", "shorts"])
     meta.update({"title": title, "answer": answer, "scenes": scenes, "script": narration,
-                 "hook_line": parts["hook"]["line"]})
+                 "hook_line": parts["hook"]["line"],
+                 "title_alts": [a.strip() for a in alts if a.strip() and a.strip() != title][:2],
+                 "pinned_comment": str(meta.get("pinned_comment", "")).strip()[:200]})
     return meta
 
 
@@ -231,7 +359,7 @@ def score_idea(meta):
     hook = meta["hook_line"]
     pts += words(hook) <= 10                                              # short hook
     pts += hook.rstrip().endswith(("؟", "?"))                             # a question to guess
-    pts += 40 <= words(meta["script"]) <= 75                             # tight length
+    pts += 34 <= words(meta["script"]) <= 65                             # tight length
     kws = [s["keyword"] for s in meta["scenes"]]
     pts += len(set(kws)) == len(kws)                                      # varied visuals
     pts += all(2 <= len(k.split()) <= 5 for k in kws)                    # concrete footage searches
@@ -244,42 +372,53 @@ def score_idea(meta):
 
 
 def make_script():
-    topic = pick_topic()
+    fmt = pick_format()
+    sub = random.choice(SUBJECTS)
+    cta = pick_cta_style()
+    print("Format:", fmt, "| CTA style:", cta)
     titles = [l.split(SEP)[0] for l in read_lines(HISTORY, 150)]
     hooks = recent(2)
     answers = recent(3)
-    prompt = f"""You write viral YouTube Shorts in ARABIC for a "guess the answer" challenge channel with MrBeast-style energy: a big claim, curiosity, a countdown, then the answer.
-Write all spoken lines in simple Arabic that every Arab viewer understands (Modern Standard Arabic mixed with easy everyday words). No heavy classical words. Short sentences. Energetic, friendly voice, talking to ONE viewer.
-Category: {topic}.
-Pick ONE surprising but TRUE, well-established fact with a short, clear, single answer (a number, an animal, a place, an object). It must be stable over time and easy to verify. No prices, no changing records or rankings, no politics, religion, medicine, violence or gambling.
+    prompt = f"""You write viral YouTube Shorts in ARABIC for a quiz and challenge channel with MrBeast-style energy: a big claim, curiosity, a 5-second countdown, then the answer.
+Write all spoken lines in simple Arabic that every Arab viewer understands (Modern Standard Arabic mixed with easy everyday words). Short sentences. Energetic, friendly voice talking to ONE viewer.
+FORMAT FOR THIS VIDEO: {FORMATS[fmt].format(sub=sub)}
+All facts must be TRUE, well established, stable over time and easy to verify. Never invent anything. No prices, no changing records or rankings, no politics, religion, medicine, violence or gambling. If you are not sure of a fact, pick a different one.
 Do NOT reuse these titles: {titles}. Do NOT open like these recent hooks: {hooks}. Do NOT reuse these answers: {answers}.
-Return the fields below. Each "line" is the exact words the narrator says. Each "keyword" is an ENGLISH stock-footage search phrase (2-5 words, a concrete filmable scene such as 'cheetah running savanna', 'astronaut floating space', 'huge waterfall aerial'). Never abstract words. Vary the shots.
-- hook: the challenge question, 5-10 words, ends with '؟', creates instant curiosity (e.g. 'هل تستطيع تخمين أسرع حيوان على الأرض؟').
-- setup: 1-2 short sentences with a clue or the stakes, 10-20 words. Do NOT give the answer.
+Each "line" is the exact words the narrator says. Each "keyword" is an ENGLISH stock-footage search phrase (2-5 words, a concrete filmable scene such as 'cheetah running savanna', 'astronaut floating space', 'huge waterfall aerial', 'chalkboard math equations'). Never abstract words. Vary the shots.
+Fields:
+- hook: the challenge question, 5-10 words, ends with '؟', creates instant curiosity.
+- hook_options: 3 different ways to ask the SAME challenge (4-9 words each, each ends with '؟'); one may use a number or 'في 5 ثوانٍ'.
+- setup: 1-2 short sentences with the clue or the full puzzle, 10-20 words. Do NOT give the answer.
 - reveal: the answer plus the one-line reason, 12-25 words.
 - extra: one amazing related TRUE fact, 10-20 words.
-- cta: one short question for the comments, 5-10 words, ends with '؟' (for example asking what they guessed).
-- title: Arabic, max 55 characters, a challenge feel, honest (no lies).
-- answer: the answer in 1-4 Arabic words.
+- cta: 5-10 words, ends with '؟'. Style: {CTA_STYLES[cta]}.
+- title: Arabic, max 55 characters, a challenge feel, honest (no lies); title_alts: 2 other title options with different wording.
+- pinned_comment: a friendly comment the channel can pin (max 20 words) that invites replies.
+- answer: the answer in 1-4 Arabic words. answer_number: the numeric answer for math riddles, otherwise null.
 - tags: 6 to 8 tags, include 'تحدي', 'خمن', 'معلومات', 'shorts' and the specific subject.
-Total narration (hook+setup+reveal+extra+cta) must be 45-70 words.
+Total narration (hook+setup+reveal+extra+cta) must be 40-60 words.
 Return ONLY JSON:
-{{"title": "", "answer": "", "hook": {{"line": "", "keyword": ""}}, "setup": {{"line": "", "keyword": ""}},
-"reveal": {{"line": "", "keyword": ""}}, "extra": {{"line": "", "keyword": ""}}, "cta": {{"line": "", "keyword": ""}}, "tags": []}}"""
-    for attempt in range(8):
+{{"title": "", "title_alts": ["", ""], "answer": "", "answer_number": null, "pinned_comment": "", "hook_options": ["", "", ""],
+"hook": {{"line": "", "keyword": ""}}, "setup": {{"line": "", "keyword": ""}}, "reveal": {{"line": "", "keyword": ""}},
+"extra": {{"line": "", "keyword": ""}}, "cta": {{"line": "", "keyword": ""}}, "tags": []}}"""
+    for attempt in range(10):
         meta = parse_meta(gemini_json(prompt))
         if not meta:
             print("Bad structure, regenerating")
             continue
+        meta["fmt"], meta["cta_style"], meta["subject"] = fmt, cta, (sub if fmt == "guess_fact" else "")
         sc = score_idea(meta)
         print("Idea score:", sc, "/ 8 | hook:", meta["hook_line"])
         if sc < MIN_SCORE:
             print("Rejected: idea score too low, regenerating")
             continue
+        if fmt == "math_riddle" and not verify_math(meta):
+            print("Rejected: independent math check disagrees")
+            continue
         check = fact_check(meta)
         print("Fact-check:", check)
         if passes_check(check):
-            meta["concept"] = topic
+            meta["concept"] = fmt
             return meta
         print("Rejected, regenerating:", meta.get("title"))
     raise RuntimeError("No script passed the structure and fact checks")
@@ -314,6 +453,36 @@ def add_music(voice, dur):
     m = AudioFileClip(make_music(dur + 1)).subclip(0, dur)
     m = m.fx(afx.volumex, 0.15).fx(afx.audio_fadein, 1).fx(afx.audio_fadeout, 2)
     return CompositeAudioClip([voice, m])
+
+
+def make_sfx(total, ticks, ding_at, path="sfx.wav"):
+    """Own generated sound effects (no copyright issues): a tick per countdown number and a bell on the answer."""
+    sr = 44100
+    out = np.zeros(int(sr * (total + 1)))
+
+    def burst(t0, freq, dur, amp, decay):
+        i = int(t0 * sr)
+        if i >= len(out):
+            return
+        n = min(int(dur * sr), len(out) - i)
+        tt = np.arange(n) / sr
+        out[i:i + n] += amp * np.sin(2 * np.pi * freq * tt) * np.exp(-decay * tt)
+
+    for k, t0 in enumerate(ticks):
+        burst(t0, 1500 if k == len(ticks) - 1 else 1000, 0.14, 0.8, 28)
+    if ding_at is not None:
+        for f in (880, 1320, 1760):
+            burst(ding_at, f, 1.1, 0.45, 4)
+    out /= max(np.abs(out).max(), 1e-9)
+    pcm = (out * 0.6 * 32767).astype(np.int16)
+    with wave.open(path, "wb") as w:
+        w.setnchannels(2); w.setsampwidth(2); w.setframerate(sr)
+        w.writeframes(np.repeat(pcm[:, None], 2, axis=1).tobytes())
+    return path
+
+
+def countdown_step(adur):
+    return max(adur, 4.0) / 5
 
 
 async def _tts_one(text, path):
@@ -470,7 +639,7 @@ def build_overlays(video, timeline):
                   ImageClip(_brand_image()).set_duration(total).set_position(("center", 150))]
         for start, adur, sc in timeline:
             if sc["kind"] == "countdown":
-                step = max(adur, 4.0) / 5
+                step = countdown_step(adur)
                 for k, n in enumerate([5, 4, 3, 2, 1]):
                     layers.append(ImageClip(_digit_image(n)).set_start(start + k * step).set_duration(step)
                                   .set_position(("center", 560)))
@@ -514,7 +683,19 @@ def build_video(meta):
         t += dur
     total = t
     voice = CompositeAudioClip(voices).set_duration(total)
-    video = concatenate_videoclips(clips).set_audio(add_music(voice, total))
+    mix = add_music(voice, total)
+    try:
+        ticks, ding = [], None
+        for st, adur, sc in timeline:
+            if sc["kind"] == "countdown":
+                ticks = [st + k * countdown_step(adur) for k in range(5)]
+            elif sc["kind"] == "reveal":
+                ding = st
+        sfx = AudioFileClip(make_sfx(total, ticks, ding)).subclip(0, total).fx(afx.volumex, 0.5)
+        mix = CompositeAudioClip([mix, sfx]).set_duration(total)
+    except Exception as e:
+        print("Sound effects skipped:", e)
+    video = concatenate_videoclips(clips).set_audio(mix)
     video = build_overlays(video, timeline)
     video.write_videofile("out.mp4", fps=30, codec="libx264", audio_codec="aac",
                           audio_bitrate="192k", preset="veryfast", threads=2, logger=None,
@@ -574,25 +755,52 @@ def upload(path, meta, creds):
                 continue
             raise
     print("Uploaded:", resp["id"])
+    return resp["id"]
+
+
+def write_log(meta, vid):
+    """One row per video. Fill views / viewed_vs_swiped_pct / avg_view_pct / likes / comments / subs_gained by hand
+    from YouTube Studio (edit log.csv on GitHub). After 8+ filled rows the formats are weighted by results."""
+    try:
+        if os.path.exists(LOG):
+            with open(LOG, encoding="utf-8", newline="") as f:
+                first = next(csv.reader(f), [])
+            if first != LOG_HEADER:
+                os.replace(LOG, "log_old.csv")  # old layout kept, new file starts clean
+        new = not os.path.exists(LOG)
+        with open(LOG, "a", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            if new:
+                w.writerow(LOG_HEADER)
+            w.writerow([datetime.date.today().isoformat(), meta["title"], meta["fmt"], meta.get("subject", ""),
+                        meta["hook_line"], meta["cta_style"], len(meta["script"].split()), meta.get("audio_sec", ""),
+                        score_idea(meta), vid, "", "", "", "", "", "",
+                        " | ".join(meta.get("title_alts", [])), meta.get("pinned_comment", "")])
+    except Exception as e:
+        print("Log skipped:", e)
+
+
+def write_summary(meta, vid):
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"### {meta['title']}\nhttps://youtube.com/shorts/{vid}\n\n"
+                    f"- format: {meta['fmt']} | CTA style: {meta['cta_style']} | idea score: {score_idea(meta)}/8\n"
+                    f"- other titles: {' | '.join(meta.get('title_alts', []))}\n"
+                    f"- comment to pin by hand: {meta.get('pinned_comment', '')}\n")
+    except Exception as e:
+        print("Summary skipped:", e)
 
 
 if __name__ == "__main__":
     creds = get_creds()
     meta = make_script()
-    print("Title:", meta["title"], "| Topic:", meta["concept"])
+    print("Title:", meta["title"], "| Format:", meta["concept"])
     video_path = build_video(meta)
-    upload(video_path, meta, creds)
+    vid = upload(video_path, meta, creds)
     with open(HISTORY, "a", encoding="utf-8") as f:
-        f.write(meta["title"] + SEP + meta["concept"] + SEP + meta["hook_line"] + SEP + meta["answer"] + "\n")
-    try:  # one row per video; fill the last 4 columns by hand from YouTube Studio
-        new = not os.path.exists(LOG)
-        with open(LOG, "a", encoding="utf-8", newline="") as f:
-            w = csv.writer(f)
-            if new:
-                w.writerow(["date", "title", "topic", "hook", "words", "total_sec", "idea_score",
-                            "views", "viewed_vs_swiped_pct", "avg_view_pct", "subs_gained"])
-            w.writerow([datetime.date.today().isoformat(), meta["title"], meta["concept"], meta["hook_line"],
-                        len(meta["script"].split()), meta.get("audio_sec", ""), score_idea(meta),
-                        "", "", "", ""])
-    except Exception as e:
-        print("Log skipped:", e)
+        f.write(SEP.join([meta["title"], meta["concept"], meta["hook_line"], meta["answer"], meta["cta_style"]]) + "\n")
+    write_log(meta, vid)
+    write_summary(meta, vid)
