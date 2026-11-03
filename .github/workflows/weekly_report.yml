@@ -1,0 +1,14 @@
+name: Weekly Report
+
+on:
+  schedule:
+    - cron: "0 8 * * 0"
+  workflow_dispatch:
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build report
+        run: python report.py >> "$GITHUB_STEP_SUMMARY"
