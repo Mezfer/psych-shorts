@@ -26,10 +26,41 @@ except Exception:
         get_display = None
 
 
+try:
+    from PIL import features as _features
+    HAS_RAQM = bool(_features.check("raqm")) and bool(_features.check("fribidi"))
+except Exception:
+    HAS_RAQM = False
+print("Arabic text engine:", "raqm" if HAS_RAQM else "reshaper+bidi")
+
+
+def _layout():
+    L = getattr(ImageFont, "Layout", None)
+    if HAS_RAQM:
+        return L.RAQM if L else ImageFont.LAYOUT_RAQM
+    return L.BASIC if L else ImageFont.LAYOUT_BASIC
+
+
 def ar(text):
+    """Text to draw. With raqm the library shapes and orders Arabic itself, so we must NOT do it twice."""
+    if HAS_RAQM:
+        return text
     if _reshaper:
         text = _reshaper.reshape(text)
     return get_display(text) if get_display else text
+
+
+def _tw(d, text, font):
+    if HAS_RAQM:
+        return d.textlength(text, font=font, direction="rtl", language="ar")
+    return d.textlength(ar(text), font=font)
+
+
+def _draw(d, xy, text, font, **kw):
+    if HAS_RAQM:
+        d.text(xy, text, font=font, direction="rtl", language="ar", **kw)
+    else:
+        d.text(xy, ar(text), font=font, **kw)
 
 
 W, H = 1080, 1920
@@ -373,7 +404,7 @@ def fit(clip, dur):
 def _font(size):
     for p in FONT_PATHS:
         if os.path.exists(p):
-            return ImageFont.truetype(p, size)
+            return ImageFont.truetype(p, size, layout_engine=_layout())
     raise RuntimeError("No font found")
 
 
@@ -384,7 +415,7 @@ def _caption_image(text):
     lines, line = [], ""
     for w in text.split():
         test = (line + " " + w).strip()
-        if line and d.textlength(ar(test), font=font) > W - 200:
+        if line and _tw(d, test, font) > W - 200:
             lines.append(line)
             line = w
         else:
@@ -394,10 +425,9 @@ def _caption_image(text):
     lh = 100
     y = (420 - lh * len(lines)) // 2
     for ln in lines:
-        shaped = ar(ln)
-        tw = d.textlength(shaped, font=font)
-        d.text(((W - tw) / 2, y), shaped, font=font, fill=(255, 255, 255, 255),
-               stroke_width=7, stroke_fill=(0, 0, 0, 255))
+        tw = _tw(d, ln, font)
+        _draw(d, ((W - tw) / 2, y), ln, font, fill=(255, 255, 255, 255),
+              stroke_width=8, stroke_fill=(0, 0, 0, 255))
         y += lh
     return np.array(img)
 
@@ -406,10 +436,9 @@ def _text_image(text, size, height, color, stroke=4):
     font = _font(size)
     img = Image.new("RGBA", (W, height), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    shaped = ar(text)
-    tw = d.textlength(shaped, font=font)
-    d.text(((W - tw) / 2, (height - size) / 2 - 8), shaped, font=font, fill=color,
-           stroke_width=stroke, stroke_fill=(0, 0, 0, 230))
+    tw = _tw(d, text, font)
+    _draw(d, ((W - tw) / 2, (height - size) / 2 - 8), text, font, fill=color,
+          stroke_width=stroke, stroke_fill=(0, 0, 0, 230))
     return np.array(img)
 
 
@@ -418,7 +447,7 @@ def _digit_image(n):
     img = Image.new("RGBA", (W, 620), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     s = str(n)
-    tw = d.textlength(s, font=font)
+    tw = d.textlength(s, font=font, direction="ltr") if HAS_RAQM else d.textlength(s, font=font)
     d.text(((W - tw) / 2, 20), s, font=font, fill=(255, 159, 28, 255),
            stroke_width=14, stroke_fill=(0, 0, 0, 255))
     return np.array(img)
@@ -437,7 +466,7 @@ def build_overlays(video, timeline):
     try:
         total = video.duration
         layers = [video,
-                  ColorClip((W, H), color=(0, 0, 0)).set_opacity(0.22).set_duration(total),
+                  ColorClip((W, H), color=(0, 0, 0)).set_opacity(0.30).set_duration(total),
                   ImageClip(_brand_image()).set_duration(total).set_position(("center", 150))]
         for start, adur, sc in timeline:
             if sc["kind"] == "countdown":
