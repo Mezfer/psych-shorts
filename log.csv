@@ -1,8 +1,2 @@
-date,title,concept,hook,words,audio_sec,scenes,idea_score,views,viewed_vs_swiped_pct,avg_view_pct,subs_gained
-2026-10-26,Why You Suddenly Start Liking Things You Once Hated,mere exposure effect,Ever noticed a song you hated suddenly becomes your favorite?,82,29.8,6,6,,,,
-2026-10-26,Why You Procrastinate Even When It Matters Most,procrastination,You open your phone to check one quick message...,76,29.4,6,7,,,,
-2026-10-26,Why You Always Expect The Best Possible Outcome,optimism bias,"You start a project, certain this time it finishes early.",73,27.5,6,6,,,,
-2026-10-26,Why You Always Finish Projects Later Than Expected,planning fallacy,Ever feel like you have way more time than you actually do?,84,33.0,6,6,,,,
-2026-11-02,هل تستطيع معرفة أين لا تمطر أبداً؟,weather and natural phenomena,هل تستطيع تخمين المكان الذي لا تمطر فيه أبداً؟,66,42.4,7,,,,
-2026-11-02,هل تستطيع معرفة الدولة التي لا تملك أي أنهار؟,world geography and famous landmarks,هل تستطيع تخمين الدولة التي لا تملك أي أنهار دائمة؟,65,43.9,7,,,,
-2026-11-03,تحدي الرياضة الوحيدة التي لُعِبت على القمر!,sports facts that never change,هل تستطيع تخمين الرياضة الوحيدة التي لُعِبَت على القمر؟,62,45.7,6,,,,
+date,title,format,subject,hook,cta_style,words,total_sec,idea_score,video_id,views,viewed_vs_swiped_pct,avg_view_pct,likes,comments,subs_gained,title_alts,pinned_comment
+2026-11-03,اختبر عقلك: هل تعرف حل هذا اللغز؟,math_riddle,,هل تستطيع حل هذه المسألة في 5 ثوانٍ؟,comment_guess,56,41.4,7,lyIm34OeJ9E,,,,,,,تحدي الذكاء: حل هذه المسألة في 5 ثوانٍ,هل عرفت الحل قبل أن يظهر؟ اكتب لي في التعليقات!
