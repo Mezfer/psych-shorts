@@ -18,3 +18,4 @@ Why You Always Finish Projects Later Than Expected || planning fallacy || Ever f
 تحدي الفواكه: صحيح أم خطأ؟ || true_false || هل الفراولة فاكهة حقيقية في 5 ثوانٍ؟ || خطأ، ليست فاكهة || replay
 هل تعرف العضو الوحيد الذي يظل ثابتاً؟ || guess_fact || أي جزء في جسمك يبقى بحجمه في 5 ثوانٍ؟ || عين الإنسان || subscribe_next
 اختبر ذكاءك: أي كائن لديه 3 قلوب؟ || unusual_fact || أي حيوان لديه 3 قلوب في 5 ثوانٍ؟ || الأخطبوط || score_comment
+هل للبطريق رُكب حقاً؟ خمن الآن! || true_false || صحيح أم خطأ؟ البطريق يملك ركبتين في 5 ثوانٍ؟ || صحيح، لديها رُكب || comment_guess
