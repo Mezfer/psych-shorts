@@ -26,3 +26,4 @@ Why You Always Finish Projects Later Than Expected || planning fallacy || Ever f
 هل تعرف حقيقة أذن الإنسان؟ || guess_fact || خمن العضو الذي لا يتغير حجمه في 5 ثوانٍ؟ || عظمة الركاب في الأذن || replay
 هل تستطيع معرفة أسرع كائن بحري؟ || unusual_fact || هل تحزر أسرع سمكة في 5 ثوانٍ؟ || سمكة شراعيات || score_comment
 هل تعرف أضخم كائن عاش على الأرض؟ || only_first || خمن في 5 ثوانٍ: من هو أضخم كائن؟ || الحوت الأزرق || comment_guess
+هل تعرف أين توجد شجرة الأرز؟ || guess_country || خمن الدولة العربية في 5 ثوانٍ فقط؟ || لبنان || tag_friend
