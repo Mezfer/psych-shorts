@@ -338,9 +338,11 @@ def parse_meta(meta):
     if words(parts["hook"]["line"]) > 12:
         print("Rejected: hook too long")
         return None
-    if not parts["cta"]["line"].rstrip().endswith(("؟", "?")):
-        print("Rejected: last line is not a question")
-        return None
+    cta_line = parts["cta"]["line"].strip()
+    if not cta_line.endswith(("؟", "?")):
+        # the model often ends the call to action with "!" or "." : fix it instead of rejecting
+        cta_line = cta_line.rstrip(" .!،,…\"'«»") + "؟"
+        parts["cta"]["line"] = cta_line
     if not parts["hook"]["line"].rstrip().endswith(("؟", "?")):
         print("Rejected: hook is not a question")
         return None
