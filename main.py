@@ -90,7 +90,7 @@ SUBJECTS = [
     "space and planets", "food and drinks around the world", "famous inventions and who made them",
     "oceans and sea creatures", "weather and natural phenomena", "everyday objects and how they work",
     "sports facts that never change", "big numbers and sizes of famous things", "birds and insects",
-    "mountains, deserts and rivers", "how things are made",
+    "mountains, deserts and rivers", "how things are made", "space exploration firsts",
 ]
 FORMATS = {
     "guess_fact": "GUESS THE ANSWER about ONE surprising fact (subject area: {sub}). The answer is short and single "
@@ -105,6 +105,11 @@ FORMATS = {
                   "Example hook: 'صحيح أم خطأ؟ الموز ينمو على أشجار!'",
     "what_next": "WHAT HAPPENS NEXT: a simple, safe everyday or physics situation with ONE certain, well-known outcome. "
                  "Never something dangerous to imitate. Example hook: 'ماذا سيحدث عندما ...؟'",
+    "only_first": "THE ONLY / THE FIRST / THE BIGGEST: a challenge about something that is the only one, the first or the "
+                  "record holder in a well-established, never-changing way (history, space exploration, sports, "
+                  "inventions, nature). The question must contain the word 'الوحيد' or 'الأول' or 'الأكبر', and the reveal "
+                  "must include the year or place if it exists. Example: 'ما هي الرياضة الوحيدة التي لُعبت على القمر؟' "
+                  "(answer: الغولف, Apollo 14, 1971).",
     "unusual_fact": "UNUSUAL MYSTERY: a question about a TRUE fact from nature or history that few people know, "
                     "with a short answer. Example hook: 'هل تعرف سبب هذا الغموض؟'",
 }
@@ -161,6 +166,7 @@ def metric_rows():
 
 def format_weights():
     w = {k: 1.0 for k in FORMATS}
+    w["only_first"] = 1.5  # starting prior: a "the only / the first" question got the most views so far; learned results replace it
     have, col = metric_rows()
     if not have:
         return w
@@ -184,7 +190,13 @@ def pick_format():
 def pick_cta_style():
     last = recent(4, 10)[-2:]
     pool = [k for k in CTA_STYLES if k not in last] or list(CTA_STYLES)
-    return random.choice(pool)
+    # "come back tomorrow" gets double weight: almost all viewers are new, so returning viewers are the gap to close
+    return random.choices(pool, weights=[2.0 if k == "subscribe_next" else 1.0 for k in pool])[0]
+
+
+def next_episode():
+    """Episode number of this challenge series (counts the Arabic challenge videos already in history.txt)."""
+    return 1 + sum(1 for l in read_lines(HISTORY, 100000) if len(l.split(SEP)) >= 4)
 
 
 def gemini_json(prompt, temperature=0.9):
@@ -317,7 +329,7 @@ def parse_meta(meta):
         return None
     narration = " ".join(parts[k]["line"] for k in ("hook", "setup", "reveal", "extra", "cta"))
     wc = words(narration)
-    if not (34 <= wc <= 72):
+    if not (34 <= wc <= 80):
         print("Rejected: length", wc)
         return None
     if _tokens(narration + " " + title) & BANNED:
@@ -359,7 +371,7 @@ def score_idea(meta):
     hook = meta["hook_line"]
     pts += words(hook) <= 10                                              # short hook
     pts += hook.rstrip().endswith(("؟", "?"))                             # a question to guess
-    pts += 34 <= words(meta["script"]) <= 65                             # tight length
+    pts += 34 <= words(meta["script"]) <= 75                             # tight length
     kws = [s["keyword"] for s in meta["scenes"]]
     pts += len(set(kws)) == len(kws)                                      # varied visuals
     pts += all(2 <= len(k.split()) <= 5 for k in kws)                    # concrete footage searches
@@ -392,11 +404,11 @@ Fields:
 - reveal: the answer plus the one-line reason, 12-25 words.
 - extra: one amazing related TRUE fact, 10-20 words.
 - cta: 5-10 words, ends with '؟'. Style: {CTA_STYLES[cta]}.
-- title: Arabic, max 55 characters, a challenge feel, honest (no lies); title_alts: 2 other title options with different wording.
+- title: Arabic, max 55 characters, a challenge feel that starts with 'تحدي' when it fits, honest (no lies), for example 'تحدي الرياضة الوحيدة التي لُعبت على القمر!'; title_alts: 2 other title options with different wording.
 - pinned_comment: a friendly comment the channel can pin (max 20 words) that invites replies.
 - answer: the answer in 1-4 Arabic words. answer_number: the numeric answer for math riddles, otherwise null.
 - tags: 6 to 8 tags, include 'تحدي', 'خمن', 'معلومات', 'shorts' and the specific subject.
-Total narration (hook+setup+reveal+extra+cta) must be 40-60 words.
+Total narration (hook+setup+reveal+extra+cta) must be {'50-70' if fmt == 'only_first' else '40-60'} words.
 Return ONLY JSON:
 {{"title": "", "title_alts": ["", ""], "answer": "", "answer_number": null, "pinned_comment": "", "hook_options": ["", "", ""],
 "hook": {{"line": "", "keyword": ""}}, "setup": {{"line": "", "keyword": ""}}, "reveal": {{"line": "", "keyword": ""}},
@@ -419,6 +431,7 @@ Return ONLY JSON:
         print("Fact-check:", check)
         if passes_check(check):
             meta["concept"] = fmt
+            meta["episode"] = next_episode()
             return meta
         print("Rejected, regenerating:", meta.get("title"))
     raise RuntimeError("No script passed the structure and fact checks")
@@ -626,17 +639,23 @@ def _brand_image():
     return _text_image(BRAND, 46, 95, (255, 159, 28, 235), stroke=3)
 
 
+def _episode_image(n):
+    return _text_image(f"تحدي رقم {n}", 42, 95, (255, 255, 255, 235), stroke=4)
+
+
 def _cta_image():
     return _text_image("تابعنا لتحدٍّ جديد كل يوم", 54, 115, (255, 255, 255, 255), stroke=5)
 
 
-def build_overlays(video, timeline):
+def build_overlays(video, timeline, episode=None):
     """Dark layer, brand tag, captions (3 words at a time, synced per scene), countdown digits, end card."""
     try:
         total = video.duration
         layers = [video,
                   ColorClip((W, H), color=(0, 0, 0)).set_opacity(0.30).set_duration(total),
                   ImageClip(_brand_image()).set_duration(total).set_position(("center", 150))]
+        if episode:
+            layers.append(ImageClip(_episode_image(episode)).set_duration(total).set_position(("center", 245)))
         for start, adur, sc in timeline:
             if sc["kind"] == "countdown":
                 step = countdown_step(adur)
@@ -655,7 +674,7 @@ def build_overlays(video, timeline):
                 t += d
         if total > 6:
             layers.append(ImageClip(_cta_image()).set_start(total - 2.2).set_duration(2.2)
-                          .set_position(("center", 250)))
+                          .set_position(("center", 350)))
         return CompositeVideoClip(layers).set_duration(total).set_audio(video.audio)
     except Exception as e:
         print("Overlays skipped:", e)
@@ -696,7 +715,7 @@ def build_video(meta):
     except Exception as e:
         print("Sound effects skipped:", e)
     video = concatenate_videoclips(clips).set_audio(mix)
-    video = build_overlays(video, timeline)
+    video = build_overlays(video, timeline, meta.get("episode"))
     video.write_videofile("out.mp4", fps=30, codec="libx264", audio_codec="aac",
                           audio_bitrate="192k", preset="veryfast", threads=2, logger=None,
                           ffmpeg_params=["-crf", "19", "-pix_fmt", "yuv420p", "-movflags", "+faststart"])
@@ -726,8 +745,8 @@ def upload(path, meta, creds):
     yt = build("youtube", "v3", credentials=creds)
     body = {
         "snippet": {
-            "title": meta["title"][:95],
-            "description": (meta["script"]
+            "title": (meta["title"] + (f" | تحدي رقم {meta['episode']}" if meta.get("episode") else ""))[:95],
+            "description": ((f"تحدي رقم {meta['episode']}\n\n" if meta.get("episode") else "") + meta["script"]
                             + "\n\nكم كانت إجابتك؟ اكتبها في التعليقات!"
                             + "\nتحدٍّ جديد كل يوم. اشترك في القناة حتى لا يفوتك."
                             + "\n\n#Shorts #تحدي #خمن #معلومات #معلومات_عامة"),
