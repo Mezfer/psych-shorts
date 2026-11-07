@@ -410,7 +410,7 @@ Fields:
 - pinned_comment: a friendly comment the channel can pin (max 20 words) that invites replies.
 - answer: the answer in 1-4 Arabic words. answer_number: the numeric answer for math riddles, otherwise null.
 - tags: 6 to 8 tags, include 'تحدي', 'خمن', 'معلومات', 'shorts' and the specific subject.
-Total narration (hook+setup+reveal+extra+cta) must be {'50-70' if fmt == 'only_first' else '40-60'} words.
+Total narration (hook+setup+reveal+extra+cta) must be {'45-58' if fmt == 'only_first' else '34-48'} words.
 Return ONLY JSON:
 {{"title": "", "title_alts": ["", ""], "answer": "", "answer_number": null, "pinned_comment": "", "hook_options": ["", "", ""],
 "hook": {{"line": "", "keyword": ""}}, "setup": {{"line": "", "keyword": ""}}, "reveal": {{"line": "", "keyword": ""}},
@@ -684,6 +684,23 @@ def build_overlays(video, timeline, episode=None):
 
 
 # ---------------------------------------------------------------- build
+def _brand_bg():
+    """Own background (navy gradient + faint question marks) for the countdown and end scenes."""
+    img = Image.new("RGB", (W, H))
+    px = ImageDraw.Draw(img)
+    for y in range(H):
+        k = y / H
+        px.line([(0, y), (W, y)], fill=(int(12 + 20 * k), int(20 + 30 * k), int(52 + 40 * k)))
+    d = ImageDraw.Draw(img, "RGBA")
+    try:
+        f = _font(520)
+    except Exception:
+        f = ImageFont.load_default()
+    d.text((W // 2, H // 2), "?", font=f, fill=(255, 190, 40, 38), anchor="mm")
+    img.save("brand_bg.png")
+    return "brand_bg.png"
+
+
 def build_video(meta):
     scenes = meta["scenes"]
     paths = asyncio.run(_tts_all(scenes))
@@ -696,7 +713,11 @@ def build_video(meta):
             dur = max(dur, 4.5)  # leave real suspense time
         voices.append(a.set_start(t))
         timeline.append((t, a.duration, sc))
-        p = safe_clip(sc["keyword"], i, used) or safe_clip("clock ticking", i, used) or last
+        if sc["kind"] in ("countdown", "cta"):
+            clips.append(ImageClip(_brand_bg()).set_duration(dur))
+            t += dur
+            continue
+        p = safe_clip(sc["keyword"], i, used) or last
         if not p:
             raise RuntimeError("No stock clips found")
         last = p
