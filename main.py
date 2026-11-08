@@ -626,8 +626,8 @@ def _text_image(text, size, height, color, stroke=4):
     return np.array(img)
 
 
-def _digit_image(n):
-    font = _font(480)
+def _digit_image(n, size=480):
+    font = _font(size)
     img = Image.new("RGBA", (W, 620), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     s = str(n)
@@ -649,7 +649,7 @@ def _cta_image():
     return _text_image("تابعنا لتحدٍّ جديد كل يوم", 54, 115, (255, 255, 255, 255), stroke=5)
 
 
-def build_overlays(video, timeline, episode=None):
+def build_overlays(video, timeline, episode=None, answer=None):
     """Dark layer, brand tag, captions (3 words at a time, synced per scene), countdown digits, end card."""
     try:
         total = video.duration
@@ -665,6 +665,10 @@ def build_overlays(video, timeline, episode=None):
                     layers.append(ImageClip(_digit_image(n)).set_start(start + k * step).set_duration(step)
                                   .set_position(("center", 560)))
                 continue
+            if sc["kind"] == "reveal" and answer:
+                size = 480 if len(answer) <= 3 else max(150, int(480 * 3 / len(answer)))
+                layers.append(ImageClip(_digit_image(answer, size)).set_start(start).set_duration(adur + 0.3)
+                              .set_position(("center", 560)))
             ws = sc["line"].split()
             parts = [" ".join(ws[i:i + 3]) for i in range(0, len(ws), 3)]
             tot = sum(len(p) for p in parts) or 1
@@ -684,7 +688,7 @@ def build_overlays(video, timeline, episode=None):
 
 
 # ---------------------------------------------------------------- build
-def _brand_bg():
+def _brand_bg(mark=True):
     """Own background (navy gradient + faint question marks) for the countdown and end scenes."""
     img = Image.new("RGB", (W, H))
     px = ImageDraw.Draw(img)
@@ -696,9 +700,24 @@ def _brand_bg():
         f = _font(520)
     except Exception:
         f = ImageFont.load_default()
-    d.text((W // 2, H // 2), "?", font=f, fill=(255, 190, 40, 38), anchor="mm")
-    img.save("brand_bg.png")
-    return "brand_bg.png"
+    if mark:
+        d.text((W // 2, H // 2), "?", font=f, fill=(255, 190, 40, 38), anchor="mm")
+    name = "brand_bg.png" if mark else "brand_bg_plain.png"
+    img.save(name)
+    return name
+
+
+def _answer_text(meta):
+    """Numeric answer as clean text for math riddles (shown big on a plain card), else None."""
+    v = meta.get("answer_number")
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except Exception:
+        return None
+    txt = str(int(f)) if f == int(f) else str(round(f, 2))
+    return txt if len(txt) <= 7 else None
 
 
 def build_video(meta):
@@ -713,8 +732,9 @@ def build_video(meta):
             dur = max(dur, 4.5)  # leave real suspense time
         voices.append(a.set_start(t))
         timeline.append((t, a.duration, sc))
-        if sc["kind"] in ("countdown", "cta"):
-            clips.append(ImageClip(_brand_bg()).set_duration(dur))
+        ans = _answer_text(meta)
+        if sc["kind"] in ("countdown", "cta") or (sc["kind"] == "reveal" and ans):
+            clips.append(ImageClip(_brand_bg(mark=sc["kind"] == "cta")).set_duration(dur))
             t += dur
             continue
         p = safe_clip(sc["keyword"], i, used) or last
@@ -738,7 +758,7 @@ def build_video(meta):
     except Exception as e:
         print("Sound effects skipped:", e)
     video = concatenate_videoclips(clips).set_audio(mix)
-    video = build_overlays(video, timeline, meta.get("episode"))
+    video = build_overlays(video, timeline, meta.get("episode"), _answer_text(meta))
     video.write_videofile("out.mp4", fps=30, codec="libx264", audio_codec="aac",
                           audio_bitrate="192k", preset="veryfast", threads=2, logger=None,
                           ffmpeg_params=["-crf", "19", "-pix_fmt", "yuv420p", "-movflags", "+faststart"])
