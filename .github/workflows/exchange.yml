@@ -1,0 +1,35 @@
+name: exchange-code
+on:
+  workflow_dispatch:
+    inputs:
+      code:
+        description: "Authorization code from OAuth Playground (starts with 4/0)"
+        required: true
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Exchange code for tokens
+        env:
+          CODE: ${{ github.event.inputs.code }}
+          CID: ${{ secrets.YT_CLIENT_ID }}
+          CSEC: ${{ secrets.YT_CLIENT_SECRET }}
+        run: |
+          curl -s -X POST https://oauth2.googleapis.com/token \
+            --data-urlencode "code=$(echo "$CODE" | tr -d ' \r\n')" \
+            --data-urlencode "client_id=$(echo "$CID" | tr -d ' \r\n')" \
+            --data-urlencode "client_secret=$(echo "$CSEC" | tr -d ' \r\n')" \
+            --data-urlencode "redirect_uri=https://developers.google.com/oauthplayground" \
+            --data-urlencode "grant_type=authorization_code" > resp.json
+          python3 - <<'PY'
+          import json
+          d = json.load(open("resp.json"))
+          if "refresh_token" in d:
+              print("OK scope:", d.get("scope"))
+              print("refresh_token_expires_in:", d.get("refresh_token_expires_in", "absent (permanent)"))
+              print("REFRESH_TOKEN_START")
+              print(d["refresh_token"])
+              print("REFRESH_TOKEN_END")
+          else:
+              print("ERROR:", d.get("error"), "-", d.get("error_description"))
+          PY
