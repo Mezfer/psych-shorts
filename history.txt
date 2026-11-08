@@ -29,3 +29,4 @@ Why You Always Finish Projects Later Than Expected || planning fallacy || Ever f
 هل تعرف أين توجد شجرة الأرز؟ || guess_country || خمن الدولة العربية في 5 ثوانٍ فقط؟ || لبنان || tag_friend
 هل تحل هذه المسألة الحسابية بسرعة؟ || math_riddle || خمن الناتج الصحيح لهذه العملية في 5 ثوانٍ؟ || الرقم عشرة || subscribe_next
 هل تعرف ماذا يحدث للثلج في الماء؟ || what_next || ماذا يحدث لمستوى الماء في 5 ثوانٍ؟ || لا يتغير مستوى الماء || replay
+هل تعرف هذا الحيوان الصامت؟ || unusual_fact || أي حيوان لا يملك صوتاً في 5 ثوانٍ؟ || الزرافة || score_comment
