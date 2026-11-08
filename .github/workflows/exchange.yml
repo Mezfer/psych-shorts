@@ -27,7 +27,7 @@ jobs:
               "code": code,
               "client_id": os.environ["CID"].strip(),
               "client_secret": os.environ["CSEC"].strip(),
-              "redirect_uri": "https://developers.google.com/oauthplayground",
+              "redirect_uri": "https://mezfer.github.io/",
               "grant_type": "authorization_code",
           }).encode()
           try:
