@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       code:
-        description: "Authorization code from OAuth Playground (starts with 4/0)"
+        description: "Code from OAuth Playground (4/0... or the whole URL)"
         required: true
 jobs:
   run:
@@ -11,19 +11,29 @@ jobs:
     steps:
       - name: Exchange code for tokens
         env:
-          CODE: ${{ github.event.inputs.code }}
+          RAWCODE: ${{ github.event.inputs.code }}
           CID: ${{ secrets.YT_CLIENT_ID }}
           CSEC: ${{ secrets.YT_CLIENT_SECRET }}
         run: |
-          curl -s -X POST https://oauth2.googleapis.com/token \
-            --data-urlencode "code=$(echo "$CODE" | tr -d ' \r\n')" \
-            --data-urlencode "client_id=$(echo "$CID" | tr -d ' \r\n')" \
-            --data-urlencode "client_secret=$(echo "$CSEC" | tr -d ' \r\n')" \
-            --data-urlencode "redirect_uri=https://developers.google.com/oauthplayground" \
-            --data-urlencode "grant_type=authorization_code" > resp.json
           python3 - <<'PY'
-          import json
-          d = json.load(open("resp.json"))
+          import os, re, json, urllib.parse, urllib.request
+          raw = os.environ["RAWCODE"].strip()
+          m = re.search(r"code=([^&\s]+)", raw)
+          if m:
+              raw = m.group(1)
+          code = urllib.parse.unquote(raw).strip().replace(" ", "")
+          print("code length:", len(code), "| starts with:", code[:4])
+          data = urllib.parse.urlencode({
+              "code": code,
+              "client_id": os.environ["CID"].strip(),
+              "client_secret": os.environ["CSEC"].strip(),
+              "redirect_uri": "https://developers.google.com/oauthplayground",
+              "grant_type": "authorization_code",
+          }).encode()
+          try:
+              d = json.load(urllib.request.urlopen(urllib.request.Request("https://oauth2.googleapis.com/token", data=data)))
+          except urllib.error.HTTPError as e:
+              d = json.loads(e.read().decode())
           if "refresh_token" in d:
               print("OK scope:", d.get("scope"))
               print("refresh_token_expires_in:", d.get("refresh_token_expires_in", "absent (permanent)"))
