@@ -32,3 +32,4 @@ Why You Always Finish Projects Later Than Expected || planning fallacy || Ever f
 هل تعرف هذا الحيوان الصامت؟ || unusual_fact || أي حيوان لا يملك صوتاً في 5 ثوانٍ؟ || الزرافة || score_comment
 هل تعرف أضخم كوكب في الفضاء؟ || guess_fact || خمن في 5 ثوانٍ: أي كوكب هو الأكبر حجماً؟ || كوكب المشتري || comment_guess
 هل ينام الدولفين وعينه مفتوحة؟ || true_false || هل ينام الدولفين بعين مفتوحة في 5 ثوانٍ؟ || صحيح || subscribe_next
+هل تعرف المعدن السائل في حرارة الغرفة؟ || only_first || خمن في 5 ثوانٍ: ما هو المعدن السائل؟ || الزئبق || tag_friend
