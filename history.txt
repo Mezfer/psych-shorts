@@ -38,3 +38,4 @@ Why You Always Finish Projects Later Than Expected || planning fallacy || Ever f
 تحدي ذكاء: هل تحسبها في 5 ثوانٍ؟ || math_riddle || هل تعرف الحل لهذا اللغز الرياضي؟ || الرقم عشرون || tag_friend
 هل تعرف الدولة ذات العلم غير المستطيل؟ || only_first || تحدي في 5 ثوانٍ: أي دولة علمها مثلث؟ || نيبال || subscribe_next
 هل تستطيع معرفة هذه الدولة في 5 ثوانٍ؟ || guess_country || هل تعرف هذه الدولة الشهيرة من رموزها؟ || فرنسا || comment_guess
+هل تعرف هذا الكائن الذي لا يشرب الماء؟ || unusual_fact || تحدي في 5 ثوانٍ: ما الحيوان الذي لا يشرب؟ || جرذ الكنغر || tag_friend
