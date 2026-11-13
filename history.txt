@@ -37,3 +37,4 @@ Why You Always Finish Projects Later Than Expected || planning fallacy || Ever f
 تحدي تخمين الدولة: هل تحزرها من 3 تلميحات؟ || guess_country || خمن الدولة من 3 تلميحات سريعة؟ || اليابان || replay
 تحدي ذكاء: هل تحسبها في 5 ثوانٍ؟ || math_riddle || هل تعرف الحل لهذا اللغز الرياضي؟ || الرقم عشرون || tag_friend
 هل تعرف الدولة ذات العلم غير المستطيل؟ || only_first || تحدي في 5 ثوانٍ: أي دولة علمها مثلث؟ || نيبال || subscribe_next
+هل تستطيع معرفة هذه الدولة في 5 ثوانٍ؟ || guess_country || هل تعرف هذه الدولة الشهيرة من رموزها؟ || فرنسا || comment_guess
