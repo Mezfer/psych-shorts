@@ -39,3 +39,4 @@ Why You Always Finish Projects Later Than Expected || planning fallacy || Ever f
 هل تعرف الدولة ذات العلم غير المستطيل؟ || only_first || تحدي في 5 ثوانٍ: أي دولة علمها مثلث؟ || نيبال || subscribe_next
 هل تستطيع معرفة هذه الدولة في 5 ثوانٍ؟ || guess_country || هل تعرف هذه الدولة الشهيرة من رموزها؟ || فرنسا || comment_guess
 هل تعرف هذا الكائن الذي لا يشرب الماء؟ || unusual_fact || تحدي في 5 ثوانٍ: ما الحيوان الذي لا يشرب؟ || جرذ الكنغر || tag_friend
+هل تعرف الدولة ذات العلم المربع؟ || only_first || أي دولة علمها الوحيد ليس مستطيلاً في العالم؟ || نيبال || subscribe_next
