@@ -43,3 +43,4 @@ Why You Always Finish Projects Later Than Expected || planning fallacy || Ever f
 تحدي الأرقام: هل تحسبها في 5 ثوانٍ؟ || math_riddle || هل تحسب ناتج هذه العملية في 5 ثوانٍ؟ || الرقم اثنا عشر || replay
 خمن في 5 ثوانٍ: ما هو أطول حيوان؟ || true_false || هل الزرافة هي أطول حيوان حقاً؟ || الزرافة || tag_friend
 تحدي: أي كوكب يدور حول نفسه بشكل جانبي؟ || guess_fact || أي كوكب يدور كأنه يتدحرج في 5 ثوانٍ؟ || كوكب أورانوس || comment_guess
+هل تعرف الحيوان الثديي الذي يطير؟ || only_first || تحدي في 5 ثوانٍ: أي ثديي يطير؟ || الخفاش || subscribe_next
