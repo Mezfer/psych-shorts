@@ -46,3 +46,4 @@ Why You Always Finish Projects Later Than Expected || planning fallacy || Ever f
 هل تعرف الحيوان الثديي الذي يطير؟ || only_first || تحدي في 5 ثوانٍ: أي ثديي يطير؟ || الخفاش || subscribe_next
 تحدي السرعة: هل تعرف من هو الأسرع؟ || true_false || تحدي في 5 ثوانٍ: من هو الأسرع؟ || الفهد الصياد || score_comment
 تحدي في 5 ثوانٍ: أي حيوان هو الأضخم؟ || guess_fact || أي حيوان هو الأضخم في 5 ثوانٍ؟ || الفيل الأفريقي || tag_friend
+هل تعرف هذه الدولة الآسيوية في 5 ثوانٍ؟ || guess_country || هل تحزر هذه الدولة من 3 تلميحات؟ || الفلبين || replay
