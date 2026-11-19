@@ -49,3 +49,4 @@ Why You Always Finish Projects Later Than Expected || planning fallacy || Ever f
 هل تعرف هذه الدولة الآسيوية في 5 ثوانٍ؟ || guess_country || هل تحزر هذه الدولة من 3 تلميحات؟ || الفلبين || replay
 خمن في 5 ثوانٍ: حيوان لا يقفز أبداً؟ || only_first || هل تعرف الحيوان الوحيد الذي لا يستطيع القفز؟ || الفيل || subscribe_next
 هل تحزر أبرد قرية مأهولة في العالم؟ || guess_fact || خمن في 5 ثوانٍ: أين تقع أبرد قرية مأهولة؟ || قرية أويمياكون في روسيا || tag_friend
+خمن الدولة في 5 ثوانٍ فقط! || guess_country || تحدي الدول: هل تحزر الاسم في 5 ثوانٍ؟ || البرازيل || score_comment
