@@ -4,8 +4,6 @@ edge-tts
 Pillow<10
 moviepy==1.0.3
 gTTS
-arabic-reshaper==3.0.0
-python-bidi==0.4.2
 google-auth
 google-auth-httplib2
 google-api-python-client
