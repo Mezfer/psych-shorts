@@ -1,18 +1,17 @@
-name: Psych Daily Short
+name: Daily Short
 
 on:
   schedule:
-    # 2 videos a day (13:11 and 19:37 UTC). Keeps you inside the YouTube API daily quota
-    # if this channel and Tom Facts share the same Google Cloud project.
-    - cron: "11 13 * * *"
-    - cron: "37 19 * * *"
+    - cron: "7 12 * * *"
+    - cron: "23 17 * * *"
+    - cron: "41 21 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: psych-short
+  group: daily-short
   cancel-in-progress: false
 
 jobs:
@@ -41,11 +40,11 @@ jobs:
       - name: Save history
         if: always()
         run: |
-          git config user.name "psych-bot"
-          git config user.email "psych-bot@users.noreply.github.com"
-          git add history.txt || true
-          git add used_clips.txt || true
+          git config user.name "tom-bot"
+          git config user.email "tom-bot@users.noreply.github.com"
+          git add history_fr.txt || true
           git add log.csv || true
+          git add used_imgs.txt || true
           git commit -m "update history" || exit 0
           git pull --rebase
           git push
