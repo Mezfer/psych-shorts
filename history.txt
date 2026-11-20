@@ -51,3 +51,4 @@ Why You Always Finish Projects Later Than Expected || planning fallacy || Ever f
 هل تحزر أبرد قرية مأهولة في العالم؟ || guess_fact || خمن في 5 ثوانٍ: أين تقع أبرد قرية مأهولة؟ || قرية أويمياكون في روسيا || tag_friend
 خمن الدولة في 5 ثوانٍ فقط! || guess_country || تحدي الدول: هل تحزر الاسم في 5 ثوانٍ؟ || البرازيل || score_comment
 تحدي في 5 ثوانٍ: أي لون للمرآة؟ || what_next || هل تعرف اللون الحقيقي للمرآة في 5 ثوانٍ؟ || الأخضر || replay
+هل تعرف الكائن بدون معدة؟ || true_false || صحيح أم خطأ: كائن بحري بلا معدة في 5 ثوانٍ؟ || خيار البحر || subscribe_next
