@@ -42,9 +42,9 @@ jobs:
         run: |
           git config user.name "tom-bot"
           git config user.email "tom-bot@users.noreply.github.com"
-          git add history_fr.txt || true
+          git add history.txt || true
           git add log.csv || true
-          git add used_imgs.txt || true
+          git add used_clips.txt || true
           git commit -m "update history" || exit 0
-          git pull --rebase
+          git pull --rebase --autostash
           git push
