@@ -3,132 +3,52 @@ import numpy as np
 import requests
 import edge_tts
 from PIL import Image, ImageDraw, ImageFont
-from moviepy.editor import (AudioFileClip, VideoFileClip, ImageClip, ColorClip,
-                            CompositeVideoClip, CompositeAudioClip, concatenate_videoclips, vfx)
+from moviepy.editor import (AudioFileClip, ImageClip, CompositeVideoClip, CompositeAudioClip,
+                            concatenate_videoclips)
 import moviepy.audio.fx.all as afx
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# Arabic text needs letter joining + right-to-left ordering before PIL can draw it.
-try:
-    import arabic_reshaper
-    _reshaper = arabic_reshaper.ArabicReshaper()
-except Exception:
-    _reshaper = None
-try:
-    from bidi.algorithm import get_display
-except Exception:
-    try:
-        from bidi import get_display
-    except Exception:
-        get_display = None
-
-
-try:
-    from PIL import features as _features
-    HAS_RAQM = bool(_features.check("raqm")) and bool(_features.check("fribidi"))
-except Exception:
-    HAS_RAQM = False
-print("Arabic text engine:", "raqm" if HAS_RAQM else "reshaper+bidi")
-
-
-def _layout():
-    L = getattr(ImageFont, "Layout", None)
-    if HAS_RAQM:
-        return L.RAQM if L else ImageFont.LAYOUT_RAQM
-    return L.BASIC if L else ImageFont.LAYOUT_BASIC
-
-
-def ar(text):
-    """Text to draw. With raqm the library shapes and orders Arabic itself, so we must NOT do it twice."""
-    if HAS_RAQM:
-        return text
-    if _reshaper:
-        text = _reshaper.reshape(text)
-    return get_display(text) if get_display else text
-
-
-def _tw(d, text, font):
-    if HAS_RAQM:
-        return d.textlength(text, font=font, direction="rtl", language="ar")
-    return d.textlength(ar(text), font=font)
-
-
-def _draw(d, xy, text, font, **kw):
-    if HAS_RAQM:
-        d.text(xy, text, font=font, direction="rtl", language="ar", **kw)
-    else:
-        d.text(xy, ar(text), font=font, **kw)
-
+# "Tu préfères ?" — French 15-second choice Shorts. Gemini writes the dilemma, Pixabay gives one photo per option,
+# edge-tts reads it, everything else (music, ticks, layout) is generated here. No faces, no copyrighted material.
 
 W, H = 1080, 1920
-BRAND = os.environ.get("BRAND", "تحدّي التخمين")
-GEMINI_KEY = os.environ["GEMINI_API_KEY"]
-# Pixabay key (the secret may still be named PEXELS_API_KEY in your repo; the code calls Pixabay)
-STOCK_KEY = os.environ.get("PIXABAY_API_KEY") or os.environ["PEXELS_API_KEY"]
+TEST = os.environ.get("TEST_RENDER") == "1"          # local layout test: no Gemini / Pixabay / YouTube
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
+STOCK_KEY = os.environ.get("PIXABAY_API_KEY") or os.environ.get("PEXELS_API_KEY", "")  # the secret may still be named PEXELS_API_KEY
 MODELS = [m for m in [os.environ.get("GEMINI_MODEL"), "gemini-3.1-flash-lite",
           "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-2.5-flash"] if m]
-VOICE = os.environ.get("VOICE", "ar-SA-HamedNeural")  # other good options: ar-EG-SalmaNeural, ar-EG-ShakirNeural
+VOICE = os.environ.get("VOICE", "fr-FR-DeniseNeural")   # other good options: fr-FR-HenriNeural, fr-FR-VivienneMultilingualNeural
 PRIVACY = os.environ.get("PRIVACY", "public")
-HISTORY = "history.txt"
-USED_CLIPS = "used_clips.txt"
+HISTORY = "history_fr.txt"
+USED_IMGS = "used_imgs.txt"
 LOG = "log.csv"
 SEP = " || "
 FONT_PATHS = [
-    "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
-    "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
 ]
+COL_A = (233, 69, 96)     # red
+COL_B = (30, 136, 229)    # blue
 
-# Each video uses ONE challenge format. Formats rotate (never the same one twice in a row) and, once you have
-# enough results in log.csv, formats that hold viewers better are picked a bit more often.
-SUBJECTS = [
-    "animals and their abilities", "the human body (general facts only, no medical advice)",
-    "space and planets", "food and drinks around the world", "famous inventions and who made them",
-    "oceans and sea creatures", "weather and natural phenomena", "everyday objects and how they work",
-    "sports facts that never change", "big numbers and sizes of famous things", "birds and insects",
-    "mountains, deserts and rivers", "how things are made", "space exploration firsts",
-]
-FORMATS = {
-    "guess_fact": "GUESS THE ANSWER about ONE surprising fact (subject area: {sub}). The answer is short and single "
-                  "(a number, an animal, a place or an object). Example hook: 'هل تستطيع تخمين أسرع حيوان على الأرض؟'",
-    "guess_country": "GUESS THE COUNTRY from 2-3 clues (a landmark, a food, geography or the flag colors). The clues must "
-                     "point to exactly ONE country and the answer is that country. Example hook: 'خمّن الدولة من هذه الألغاز الثلاثة!'",
-    "math_riddle": "A very short MATH or LOGIC riddle that a person can solve in 5 seconds in their head (simple arithmetic "
-                   "with a small trick). The hook plus the setup must contain the COMPLETE puzzle. It must have exactly "
-                   "ONE numeric answer: put it in 'answer_number'. Example hook: 'هل تحل هذه المسألة في 5 ثوانٍ؟'",
-    "true_false": "TRUE OR FALSE: one surprising claim that is clearly TRUE, or a common myth that is clearly FALSE, "
-                  "according to well-established knowledge. The viewer decides. The answer is 'صحيح' or 'خطأ'. "
-                  "Example hook: 'صحيح أم خطأ؟ الموز ينمو على أشجار!'",
-    "what_next": "WHAT HAPPENS NEXT: a simple, safe everyday or physics situation with ONE certain, well-known outcome. "
-                 "Never something dangerous to imitate. Example hook: 'ماذا سيحدث عندما ...؟'",
-    "only_first": "THE ONLY / THE FIRST / THE BIGGEST: a challenge about something that is the only one, the first or the "
-                  "record holder in a well-established, never-changing way (history, space exploration, sports, "
-                  "inventions, nature). The question must contain the word 'الوحيد' or 'الأول' or 'الأكبر', and the reveal "
-                  "must include the year or place if it exists. Example: 'ما هي الرياضة الوحيدة التي لُعبت على القمر؟' "
-                  "(answer: الغولف, Apollo 14, 1971).",
-    "unusual_fact": "UNUSUAL MYSTERY: a question about a TRUE fact from nature or history that few people know, "
-                    "with a short answer. Example hook: 'هل تعرف سبب هذا الغموض؟'",
+CATEGORIES = {
+    "food": "food and drinks everybody knows (pizza, chocolate, fries, ice cream, breakfast...)",
+    "superpower": "funny harmless superpowers and magic abilities",
+    "money_life": "everyday life and lifestyle choices (house, car, holidays, free time, sleep)",
+    "animals": "animals as pets or animals in absurd situations (nothing cruel)",
+    "tech": "phones, games, internet, social networks, robots",
+    "travel": "travel and places (sea, mountain, city, countryside, famous countries)",
+    "school_work": "school, work and daily habits that everyone knows",
+    "absurd": "absurd, silly and funny situations that make people laugh",
+    "time": "time, age, past and future choices",
+    "senses": "everyday sensations: weather, seasons, smells, sounds, tastes",
 }
-CTA_STYLES = {
-    "comment_guess": "ask what they guessed, for example 'ما هو تخمينك؟ اكتبه في التعليقات؟'",
-    "tag_friend": "challenge them to send it to a friend, for example 'هل سيعرف صديقك الإجابة؟ أرسله له الآن؟'",
-    "subscribe_next": "invite them to come back for the next challenge, for example 'هل أنت مستعد لتحدي الغد؟ اشترك الآن؟'",
-    "score_comment": "ask whether they got it right, for example 'هل أجبت بشكل صحيح؟ اكتب نعم أو لا؟'",
-    "replay": "invite them to watch again and check, for example 'هل لاحظت كل شيء؟ شاهد مرة أخرى؟'",
-}
-FORMAT_RULES = {
-    "true_false": "The claim must be clearly true or clearly false by well-established knowledge, and the declared answer must match.",
-    "guess_country": "The clues must identify exactly ONE country, with no other country possible.",
-    "math_riddle": "Solve the puzzle yourself step by step; the numeric answer must be exactly right.",
-}
-BANNED = {"اكتئاب", "قلق", "علاج", "تشخيص", "مرض", "سياسة", "الحرب", "الحروب", "الدين", "قمار", "مخدرات",
-          "انتحار", "جنس", "إرهاب", "اضمن", "مضمون", "ترامب", "اسرائيل", "إسرائيل"}
-ABSTRACT = ("concept", "idea", "fact", "trivia", "quiz", "question", "answer", "challenge", "knowledge")
-COUNTDOWN_LINE = "خمسة... أربعة... ثلاثة... اثنان... واحد..."
+BANNED = {"sexe", "sexuel", "porno", "mort", "mourir", "tuer", "suicide", "drogue", "alcool", "cigarette", "guerre",
+          "politique", "religion", "dieu", "islam", "juif", "chrétien", "cancer", "maladie", "viol", "terroriste",
+          "racisme", "nazi", "arme", "sang", "pari", "casino"}
 
 
 def read_lines(path, n):
@@ -138,65 +58,38 @@ def read_lines(path, n):
         return [l.strip() for l in f if l.strip()][-n:]
 
 
-LOG_HEADER = ["date", "title", "format", "subject", "hook", "cta_style", "words", "total_sec", "idea_score",
-              "video_id", "views", "viewed_vs_swiped_pct", "avg_view_pct", "likes", "comments", "subs_gained",
-              "title_alts", "pinned_comment"]
-
-
-def _num(x):
-    try:
-        return float(str(x).replace("%", "").replace(",", ".").strip())
-    except Exception:
-        return None
-
-
-def metric_rows():
-    """Rows of log.csv that you filled in by hand. Needs at least 8 rows before it is used at all."""
-    try:
-        with open(LOG, encoding="utf-8", newline="") as f:
-            rows = list(csv.DictReader(f))
-    except Exception:
-        return [], None
-    for col in ("viewed_vs_swiped_pct", "views"):
-        have = [r for r in rows if _num(r.get(col)) is not None]
-        if len(have) >= 8:
-            return have, col
-    return [], None
-
-
-def format_weights():
-    w = {k: 1.0 for k in FORMATS}
-    w["only_first"] = 1.5  # starting prior: a "the only / the first" question got the most views so far; learned results replace it
-    have, col = metric_rows()
-    if not have:
-        return w
-    mean = sum(_num(r[col]) for r in have) / len(have)
-    if mean <= 0:
-        return w
-    for k in FORMATS:
-        vals = [_num(r[col]) for r in have if r.get("format") == k]
-        if len(vals) >= 2:  # a format needs 2+ measured videos before its weight changes; weights stay in 0.5-2.0
-            w[k] = min(2.0, max(0.5, (sum(vals) / len(vals)) / mean))
-    return w
-
-
-def pick_format():
-    last = recent(1, 10)[-2:]
-    w = format_weights()
-    pool = [k for k in FORMATS if k not in last] or list(FORMATS)
-    return random.choices(pool, weights=[w[k] for k in pool])[0]
-
-
-def pick_cta_style():
-    last = recent(4, 10)[-2:]
-    pool = [k for k in CTA_STYLES if k not in last] or list(CTA_STYLES)
-    # "come back tomorrow" gets double weight: almost all viewers are new, so returning viewers are the gap to close
-    return random.choices(pool, weights=[2.0 if k == "subscribe_next" else 1.0 for k in pool])[0]
+def recent(idx, n=80):
+    out = []
+    for l in read_lines(HISTORY, n):
+        p = l.split(SEP)
+        if len(p) > idx:
+            out.append(p[idx])
+    return out
 
 
 def next_episode():
-    """Episode number of this challenge series (counts the Arabic challenge videos already in history.txt)."""
-    return 1 + sum(1 for l in read_lines(HISTORY, 100000) if len(l.split(SEP)) >= 4)
+    return 1 + len(read_lines(HISTORY, 100000))
+
+
+def _tokens(t):
+    return set(re.findall(r"[a-zàâäçéèêëîïôöùûüÿœ0-9']+", t.lower()))
+
+
+def words(t):
+    return len(t.split())
+
+
+def too_similar(a, b):
+    """True when this dilemma resembles one of the recent ones (same two options in any order, or mostly the same words)."""
+    new = _tokens(a) | _tokens(b)
+    for line in read_lines(HISTORY, 150):
+        p = line.split(SEP)
+        if len(p) < 4:
+            continue
+        old = _tokens(p[2]) | _tokens(p[3])
+        if new and old and len(new & old) / len(new | old) > 0.5:
+            return True
+    return False
 
 
 def gemini_json(prompt, temperature=0.9):
@@ -222,256 +115,158 @@ def gemini_json(prompt, temperature=0.9):
     raise RuntimeError("All Gemini models failed. Last: " + str(last_err))
 
 
-def _line(meta, kind):
-    return next(s["line"] for s in meta["scenes"] if s["kind"] == kind)
+# ---------------------------------------------------------------- script
+def pick_category():
+    last = recent(1, 10)[-3:]
+    pool = [k for k in CATEGORIES if k not in last] or list(CATEGORIES)
+    return random.choice(pool)
 
 
-def fact_check(meta):
-    prompt = f"""You are a strict fact-checker for short Arabic trivia videos. Check the facts, in any language.
-Format: {meta.get('fmt', '')}
-Title: {meta['title']}
-Question: {_line(meta, 'hook')}
-Clue: {_line(meta, 'setup')}
-Answer and explanation: {_line(meta, 'reveal')}
-Declared answer: {meta['answer']}
-Extra fact: {_line(meta, 'extra')}
-Checks:
-1) ANSWER: is the answer to the question correct and unambiguous (only one reasonable answer)? {FORMAT_RULES.get(meta.get('fmt'), '')}
-2) STABLE: is every claim a well-established fact that does not change over time and is not disputed? (No prices, no 'latest' records, no rankings that change.)
-3) DETAILS: are all numbers and the extra fact correct? Mark false if any number is wrong, rounded misleadingly, or unsure.
-4) SAFE: no politics, religion, medical advice, violence, gambling or sensitive claims.
-Be strict: when unsure, fail the check. "confidence" = how sure you are (1-10) that everything is correct. Use 8 or more only when certain.
-Return ONLY JSON: {{"answer_correct": true or false, "stable": true or false, "details_ok": true or false, "safe": true or false, "confidence": 1-10, "issue": "short reason"}}"""
-    return gemini_json(prompt, temperature=0.0)
-
-
-def verify_math(meta):
-    """Second, independent solve of the riddle (the model does not see our answer). Numbers must match exactly."""
-    try:
-        want = float(meta.get("answer_number"))
-        out = gemini_json("Solve this puzzle carefully, step by step in your head. Question: "
-                          + _line(meta, "hook") + " " + _line(meta, "setup")
-                          + ' Return ONLY JSON: {"answer_number": number}', temperature=0.0)
-        return abs(float(out["answer_number"]) - want) < 1e-9
-    except Exception:
-        return False
-
-
-def passes_check(c):
-    return (c.get("answer_correct") is True and c.get("stable") is True and c.get("details_ok") is True
-            and c.get("safe") is True and c.get("confidence", 0) >= 8)
-
-
-def _tokens(t):
-    return set(re.findall(r"[؀-ۿ]+|[a-z0-9']+", t.lower()))
-
-
-def words(t):
-    return len(t.split())
-
-
-def recent(idx, n=60):
-    out = []
-    for l in read_lines(HISTORY, n):
-        p = l.split(SEP)
-        if len(p) > idx:
-            out.append(p[idx])
-    return out
-
-
-def best_hook(cands):
-    """Pick the strongest hook among the options by simple rules (short, a number or time limit, not like recent hooks)."""
-    old = [_tokens(h) for h in recent(2)]
-    best = None
-    for c in cands:
-        c = str(c).strip()
-        if not c or not c.endswith(("؟", "?")) or words(c) > 10:
-            continue
-        t = _tokens(c)
-        sc = (2 if re.search(r"\d|ثوان|ثانية|خمس", c) else 0) + (1 if words(c) <= 8 else 0)
-        if any(t and len(t & o) / len(t | o) > 0.5 for o in old):
-            sc -= 3
-        sc += random.random() * 0.5
-        if best is None or sc > best[0]:
-            best = (sc, c)
-    return best[1] if best else None
-
-
-def best_title(cands):
-    cs = [str(c).strip().strip('"').strip() for c in cands if str(c).strip()]
-    cs = [c for c in cs if 8 <= len(c) <= 60]
-    if not cs:
-        return ""
-    return max(cs, key=lambda c: (("؟" in c or "?" in c) + bool(re.search(r"\d|ثوان", c)) - len(c) / 200))
+def clean_option(s):
+    s = str(s).strip().strip('"«»').strip()
+    s = re.sub(r"^(tu préfères|tu preferes)\s*", "", s, flags=re.I)
+    s = s.rstrip(" ?!.,;…")
+    return s[:1].lower() + s[1:] if s else s
 
 
 def parse_meta(meta):
-    """Validate Gemini's JSON and build the scene list. Returns None when unusable."""
     try:
-        parts = {}
-        for k in ("hook", "setup", "reveal", "extra", "cta"):
-            d = meta[k]
-            line, kw = str(d["line"]).strip(), str(d["keyword"]).strip()
-            if not line or not re.fullmatch(r"[A-Za-z ]{3,40}", kw):
-                print("Bad scene:", k)
-                return None
-            parts[k] = {"line": line, "keyword": kw.lower()}
+        a, b = clean_option(meta["a"]), clean_option(meta["b"])
+        ka, kb = str(meta["keyword_a"]).strip().lower(), str(meta["keyword_b"]).strip().lower()
+        title = str(meta["title"]).strip().strip('"')
+        cta = str(meta["cta"]).strip()
     except Exception:
         return None
-    opts = meta.get("hook_options")
-    opts = opts if isinstance(opts, list) else []
-    parts["hook"]["line"] = best_hook([parts["hook"]["line"]] + opts) or parts["hook"]["line"]
-    alts = meta.get("title_alts")
-    alts = [str(a) for a in alts] if isinstance(alts, list) else []
-    title = best_title([meta.get("title", "")] + alts)
-    answer = str(meta.get("answer", "")).strip()
-    if not title or not answer:
+    if not (a and b and title and cta):
         return None
-    narration = " ".join(parts[k]["line"] for k in ("hook", "setup", "reveal", "extra", "cta"))
-    wc = words(narration)
-    if not (34 <= wc <= 80):
-        print("Rejected: length", wc)
+    if not (2 <= words(a) <= 9 and 2 <= words(b) <= 9):
+        print("Rejected: option length")
         return None
-    if _tokens(narration + " " + title) & BANNED:
+    if a.lower() == b.lower() or _tokens(a) == _tokens(b):
+        return None
+    for k in (ka, kb):
+        if not re.fullmatch(r"[a-z ]{3,30}", k):
+            print("Rejected: bad image keyword", k)
+            return None
+    if (_tokens(a + " " + b + " " + title) & BANNED):
         print("Rejected by banned-word filter")
         return None
-    if words(parts["hook"]["line"]) > 12:
-        print("Rejected: hook too long")
+    if ka == kb:
         return None
-    cta_line = parts["cta"]["line"].strip()
-    if not cta_line.endswith(("؟", "?")):
-        # the model often ends the call to action with "!" or "." : fix it instead of rejecting
-        cta_line = cta_line.rstrip(" .!،,…\"'«»") + "؟"
-        parts["cta"]["line"] = cta_line
-    if not parts["hook"]["line"].rstrip().endswith(("؟", "?")):
-        print("Rejected: hook is not a question")
-        return None
-    scenes = [
-        {"kind": "hook", **parts["hook"]},
-        {"kind": "setup", **parts["setup"]},
-        {"kind": "countdown", "line": COUNTDOWN_LINE, "keyword": "clock ticking close up"},
-        {"kind": "reveal", **parts["reveal"]},
-        {"kind": "extra", **parts["extra"]},
-        {"kind": "cta", **parts["cta"]},
-    ]
+    if words(cta) > 12:
+        cta = "A ou B ? Dis-le en commentaire !"
+    if not cta.rstrip().endswith(("?", "!")):
+        cta = cta.rstrip(" .") + " !"
     tags = meta.get("tags")
-    meta["tags"] = ([str(t)[:30] for t in tags][:10] if isinstance(tags, list) and tags
-                    else ["تحدي", "خمن", "معلومات", "shorts"])
-    meta.update({"title": title, "answer": answer, "scenes": scenes, "script": narration,
-                 "hook_line": parts["hook"]["line"],
-                 "title_alts": [a.strip() for a in alts if a.strip() and a.strip() != title][:2],
-                 "pinned_comment": str(meta.get("pinned_comment", "")).strip()[:200]})
+    tags = [str(t).strip().lstrip("#")[:30] for t in tags if str(t).strip()][:10] if isinstance(tags, list) else []
+    meta.update({
+        "a": a, "b": b, "keyword_a": ka, "keyword_b": kb, "title": title[:90], "cta": cta,
+        "tags": tags or ["tu préfères", "quiz", "choix", "shorts"],
+        "pinned_comment": str(meta.get("pinned_comment", "")).strip()[:200],
+    })
     return meta
 
 
-MIN_SCORE = 7
-
-
-def score_idea(meta):
-    """Rule-based craft score (0-8). It checks the writing rules only; it does not predict views."""
-    pts = 0
-    hook = meta["hook_line"]
-    pts += words(hook) <= 10                                              # short hook
-    pts += hook.rstrip().endswith(("؟", "?"))                             # a question to guess
-    pts += 34 <= words(meta["script"]) <= 75                             # tight length
-    kws = [s["keyword"] for s in meta["scenes"]]
-    pts += len(set(kws)) == len(kws)                                      # varied visuals
-    pts += all(2 <= len(k.split()) <= 5 for k in kws)                    # concrete footage searches
-    pts += not any(a in k for k in kws for a in ABSTRACT)                # no abstract searches
-    pts += words(meta["scenes"][-1]["line"]) <= 12                       # short comment call
-    new = _tokens(hook)
-    old = [_tokens(h) for h in recent(2)]
-    pts += not any(new and len(new & o) / len(new | o) > 0.5 for o in old)  # distinct from recent hooks
-    return pts
+def judge(meta):
+    """French proofreader + balance check. Returns corrected options or None."""
+    prompt = f"""You are a strict native French proofreader and editor for a "Tu préfères ?" YouTube Shorts channel.
+The video says: "Tu préfères {meta['a']}, ou {meta['b']} ?"
+Check:
+1) GRAMMAR: both options are correct French and each one completes "Tu préfères ... ?" naturally (usually an infinitive phrase). Fix any spelling, accent or grammar mistake.
+2) BALANCED: neither option is obviously better, so people really argue in the comments.
+3) SAFE: nothing about sex, violence, death, illness, drugs, alcohol, politics, religion, gambling, or any real person or brand scandal.
+4) CLEAR: understandable in 3 seconds, and each option can be shown with a simple photo.
+Return ONLY JSON: {{"ok": true or false, "a": "corrected option A, lowercase first letter, no final punctuation", "b": "corrected option B, same rules", "issue": "short reason"}}"""
+    try:
+        out = gemini_json(prompt, temperature=0.0)
+    except Exception as e:
+        print("Judge failed:", e)
+        return None
+    if out.get("ok") is not True:
+        print("Judge rejected:", out.get("issue"))
+        return None
+    a, b = clean_option(out.get("a") or meta["a"]), clean_option(out.get("b") or meta["b"])
+    return a, b
 
 
 def make_script():
-    fmt = pick_format()
-    sub = random.choice(SUBJECTS)
-    cta = pick_cta_style()
-    print("Format:", fmt, "| CTA style:", cta)
-    titles = [l.split(SEP)[0] for l in read_lines(HISTORY, 150)]
-    hooks = recent(2)
-    answers = recent(3)
-    prompt = f"""You write viral YouTube Shorts in ARABIC for a quiz and challenge channel with MrBeast-style energy: a big claim, curiosity, a 5-second countdown, then the answer.
-Write all spoken lines in simple Arabic that every Arab viewer understands (Modern Standard Arabic mixed with easy everyday words). Short sentences. Energetic, friendly voice talking to ONE viewer.
-FORMAT FOR THIS VIDEO: {FORMATS[fmt].format(sub=sub)}
-All facts must be TRUE, well established, stable over time and easy to verify. Never invent anything. No prices, no changing records or rankings, no politics, religion, medicine, violence or gambling. If you are not sure of a fact, pick a different one.
-Do NOT reuse these titles: {titles}. Do NOT open like these recent hooks: {hooks}. Do NOT reuse these answers: {answers}.
-Each "line" is the exact words the narrator says. Each "keyword" is an ENGLISH stock-footage search phrase (2-5 words, a concrete filmable scene such as 'cheetah running savanna', 'astronaut floating space', 'huge waterfall aerial', 'chalkboard math equations'). Never abstract words. Vary the shots.
+    cat = pick_category()
+    old = [f"{x} / {y}" for x, y in zip(recent(2, 40), recent(3, 40))]
+    prompt = f"""You write viral YouTube Shorts "Tu préfères ?" (Would you rather?) in FRENCH for a general audience of teenagers and adults.
+Everything spoken or written is in correct, natural, everyday French.
+CATEGORY for this video: {CATEGORIES[cat]}
+Write ONE dilemma with two options A and B. Rules:
+- The video says: "Tu préfères {{a}}, ou {{b}} ?" so a and b must each complete that sentence naturally: an infinitive phrase such as "vivre sans téléphone pendant un an" or "avoir toujours trop chaud". 3 to 8 words each, lowercase first letter, no final punctuation.
+- Both options are about equally attractive or equally annoying, so that viewers split 50/50 and argue in the comments. Make it surprising, funny or tempting. No yes/no questions.
+- Each option must be easy to show with ONE simple, concrete, filmable photo. keyword_a and keyword_b are ENGLISH stock-photo search phrases of 1 to 3 words (a concrete object, animal, food or place such as 'pizza', 'snowy mountain', 'cute cat', 'smartphone'). Never abstract words, never the same keyword twice.
+- Totally safe: nothing about sex, violence, death, illness, drugs, alcohol, politics, religion, gambling, or real people.
+- Do NOT repeat or resemble these recent dilemmas: {old[-40:]}
 Fields:
-- hook: the challenge question, 5-10 words, ends with '؟', creates instant curiosity.
-- hook_options: 3 different ways to ask the SAME challenge (4-9 words each, each ends with '؟'); one may use a number or 'في 5 ثوانٍ'.
-- setup: 1-2 short sentences with the clue or the full puzzle, 10-20 words. Do NOT give the answer.
-- reveal: the answer plus the one-line reason, 12-25 words.
-- extra: one amazing related TRUE fact, 10-20 words.
-- cta: 5-10 words, ends with '؟'. Style: {CTA_STYLES[cta]}.
-- title: Arabic, max 55 characters, a challenge feel that starts with 'تحدي' when it fits, honest (no lies), for example 'تحدي الرياضة الوحيدة التي لُعبت على القمر!'; title_alts: 2 other title options with different wording.
-- pinned_comment: a friendly comment the channel can pin (max 20 words) that invites replies.
-- answer: the answer in 1-4 Arabic words. answer_number: the numeric answer for math riddles, otherwise null.
-- tags: 6 to 8 tags, include 'تحدي', 'خمن', 'معلومات', 'shorts' and the specific subject.
-Total narration (hook+setup+reveal+extra+cta) must be {'45-58' if fmt == 'only_first' else '34-48'} words.
+- title: French YouTube title, max 80 characters, curiosity, starts with 'Tu préfères' and contains both options or a teaser, may end with a single emoji.
+- cta: French call to action, 5-9 words, asks to answer in the comments, for example 'A ou B ? Dis-le en commentaire !'.
+- pinned_comment: a friendly French comment the channel can pin (max 18 words) that asks people to vote.
+- tags: 6 to 8 tags in French, include 'tu préfères', 'quiz', 'choix', 'shorts'.
 Return ONLY JSON:
-{{"title": "", "title_alts": ["", ""], "answer": "", "answer_number": null, "pinned_comment": "", "hook_options": ["", "", ""],
-"hook": {{"line": "", "keyword": ""}}, "setup": {{"line": "", "keyword": ""}}, "reveal": {{"line": "", "keyword": ""}},
-"extra": {{"line": "", "keyword": ""}}, "cta": {{"line": "", "keyword": ""}}, "tags": []}}"""
+{{"title": "", "a": "", "b": "", "keyword_a": "", "keyword_b": "", "cta": "", "pinned_comment": "", "tags": []}}"""
     for attempt in range(10):
         meta = parse_meta(gemini_json(prompt))
         if not meta:
-            print("Bad structure, regenerating")
             continue
-        meta["fmt"], meta["cta_style"], meta["subject"] = fmt, cta, (sub if fmt == "guess_fact" else "")
-        sc = score_idea(meta)
-        print("Idea score:", sc, "/ 8 | hook:", meta["hook_line"])
-        if sc < MIN_SCORE:
-            print("Rejected: idea score too low, regenerating")
+        if too_similar(meta["a"], meta["b"]):
+            print("Rejected: too similar to a past video")
             continue
-        if fmt == "math_riddle" and not verify_math(meta):
-            print("Rejected: independent math check disagrees")
+        fixed = judge(meta)
+        if not fixed:
             continue
-        check = fact_check(meta)
-        print("Fact-check:", check)
-        if passes_check(check):
-            meta["concept"] = fmt
-            meta["episode"] = next_episode()
-            return meta
-        print("Rejected, regenerating:", meta.get("title"))
-    raise RuntimeError("No script passed the structure and fact checks")
+        meta["a"], meta["b"] = fixed
+        if not (2 <= words(meta["a"]) <= 9 and 2 <= words(meta["b"]) <= 9):
+            continue
+        meta["category"] = cat
+        meta["episode"] = next_episode()
+        meta["hook_line"] = "Tu préfères"
+        print(f"Attempt {attempt + 1}: OK  {meta['a']}  |  {meta['b']}")
+        return meta
+    raise RuntimeError("No dilemma passed the checks.")
 
 
 # ---------------------------------------------------------------- audio
 def make_music(dur, path="bg.wav"):
     sr = 44100
     t = np.linspace(0, dur, int(sr * dur), endpoint=False)
-    chords = [[220.00, 261.63, 329.63], [174.61, 220.00, 261.63],
-              [130.81, 164.81, 196.00], [196.00, 246.94, 293.66]]
+    chords = [[261.63, 329.63, 392.00], [220.00, 261.63, 329.63],
+              [174.61, 220.00, 261.63], [196.00, 246.94, 293.66]]
     out = np.zeros_like(t)
-    seg = 6.0
+    seg = 3.0
     for k in range(int(dur // seg) + 1):
         s, e = int(k * seg * sr), min(int((k + 1) * seg * sr), len(t))
         if s >= e:
             break
         tt = t[s:e]
-        env = np.clip(np.minimum((tt - tt[0]) / 1.5, (tt[-1] - tt) / 1.5), 0, 1)
+        env = np.clip(np.minimum((tt - tt[0]) / 0.6, (tt[-1] - tt) / 0.6), 0, 1)
         for f in chords[k % 4]:
-            out[s:e] += env * (np.sin(2*np.pi*f*tt) + 0.3*np.sin(2*np.pi*2*f*tt))
+            out[s:e] += env * (np.sin(2 * np.pi * f * tt) + 0.25 * np.sin(2 * np.pi * 2 * f * tt))
+        # soft beat: a short low thump twice per second
+        for b in np.arange(0, e - s, int(sr * 0.5)):
+            n = min(int(sr * 0.12), e - s - b)
+            if n > 0:
+                x = np.arange(n) / sr
+                out[s + b:s + b + n] += 1.2 * np.sin(2 * np.pi * 70 * x) * np.exp(-30 * x)
     out /= max(np.abs(out).max(), 1e-9)
     pcm = (out * 0.5 * 32767).astype(np.int16)
-    st = np.repeat(pcm[:, None], 2, axis=1)
     with wave.open(path, "wb") as w:
         w.setnchannels(2); w.setsampwidth(2); w.setframerate(sr)
-        w.writeframes(st.tobytes())
+        w.writeframes(np.repeat(pcm[:, None], 2, axis=1).tobytes())
     return path
 
 
 def add_music(voice, dur):
     m = AudioFileClip(make_music(dur + 1)).subclip(0, dur)
-    m = m.fx(afx.volumex, 0.15).fx(afx.audio_fadein, 1).fx(afx.audio_fadeout, 2)
+    m = m.fx(afx.volumex, 0.16).fx(afx.audio_fadein, 0.5).fx(afx.audio_fadeout, 1.5)
     return CompositeAudioClip([voice, m])
 
 
-def make_sfx(total, ticks, ding_at, path="sfx.wav"):
-    """Own generated sound effects (no copyright issues): a tick per countdown number and a bell on the answer."""
+def make_sfx(total, ticks, pops, ding_at, path="sfx.wav"):
+    """Own generated effects: a pop when each option appears, a tick per countdown number, a bell at the end card."""
     sr = 44100
     out = np.zeros(int(sr * (total + 1)))
 
@@ -483,11 +278,13 @@ def make_sfx(total, ticks, ding_at, path="sfx.wav"):
         tt = np.arange(n) / sr
         out[i:i + n] += amp * np.sin(2 * np.pi * freq * tt) * np.exp(-decay * tt)
 
+    for t0 in pops:
+        burst(t0, 600, 0.12, 0.7, 30)
     for k, t0 in enumerate(ticks):
         burst(t0, 1500 if k == len(ticks) - 1 else 1000, 0.14, 0.8, 28)
     if ding_at is not None:
-        for f in (880, 1320, 1760):
-            burst(ding_at, f, 1.1, 0.45, 4)
+        for f in (880, 1320):
+            burst(ding_at, f, 0.9, 0.4, 5)
     out /= max(np.abs(out).max(), 1e-9)
     pcm = (out * 0.6 * 32767).astype(np.int16)
     with wave.open(path, "wb") as w:
@@ -496,29 +293,37 @@ def make_sfx(total, ticks, ding_at, path="sfx.wav"):
     return path
 
 
-def countdown_step(adur):
-    return max(adur, 4.0) / 5
+def _fake_voice(text, path):
+    """Test mode only: silence of a speaking-like length."""
+    sr = 22050
+    n = int(sr * max(0.8, len(text) * 0.065))
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+        w.writeframes(np.zeros(n, dtype=np.int16).tobytes())
 
 
 async def _tts_one(text, path):
+    if TEST:
+        _fake_voice(text, path)
+        return
     try:
-        await edge_tts.Communicate(text, VOICE, rate="+4%").save(path)
+        await edge_tts.Communicate(text, VOICE, rate="+6%").save(path)
     except Exception as e:
         print("edge-tts failed, using gTTS:", e)
         from gtts import gTTS
-        gTTS(text, lang="ar").save(path)
+        gTTS(text, lang="fr").save(path)
 
 
-async def _tts_all(scenes):
+async def _tts_all(lines):
     paths = []
-    for i, sc in enumerate(scenes):
+    for i, line in enumerate(lines):
         p = f"voice{i}.mp3"
-        await _tts_one(sc["line"], p)
+        await _tts_one(line, p)
         paths.append(p)
     return paths
 
 
-# ---------------------------------------------------------------- footage
+# ---------------------------------------------------------------- images
 def _get_with_retry(url, params, tries=3):
     import time
     for k in range(tries):
@@ -532,236 +337,217 @@ def _get_with_retry(url, params, tries=3):
     return r
 
 
-def get_clip(query, i, used):
-    r = _get_with_retry("https://pixabay.com/api/videos/",
-                        {"key": STOCK_KEY, "q": query, "per_page": 40, "safesearch": "true"})
-    hits = [h for h in r.json().get("hits", []) if str(h.get("id")) not in used]
-    random.shuffle(hits)
-    ws = [w for w in query.lower().split() if len(w) > 2]
+def _fallback_photo(path, col):
+    """Plain gradient card if no photo can be found, so the video still renders."""
+    img = Image.new("RGB", (1280, 853))
+    px = ImageDraw.Draw(img)
+    for y in range(853):
+        k = y / 853
+        px.line([(0, y), (1280, y)], fill=tuple(int(c * (0.5 + 0.5 * k)) for c in col))
+    img.save(path, quality=92)
+    return path
 
-    def score(h):
-        tags = (h.get("tags") or "").lower()
-        return sum(1 for w in ws if w in tags)
 
-    hits.sort(key=lambda h: -score(h))
-    for h in hits:
-        url = None
-        for size in ("large", "medium", "small"):
-            d = h["videos"].get(size) or {}
-            if d.get("url") and (d.get("width") or 0) <= 1920:
-                url = d["url"]
-                break
-        if not url:
+def get_image(query, i, used, col):
+    path = f"img{i}.jpg"
+    if TEST:
+        return _fallback_photo(path, col)
+    for q in (query, query.split()[-1] if " " in query else None):
+        if not q:
             continue
-        path = f"clip{i}.mp4"
-        with requests.get(url, stream=True, timeout=120) as dl:
-            dl.raise_for_status()
-            with open(path, "wb") as out:
-                for chunk in dl.iter_content(1 << 20):
-                    out.write(chunk)
-        used.add(str(h["id"]))
-        with open(USED_CLIPS, "a", encoding="utf-8") as f:
-            f.write(str(h["id"]) + "\n")
-        return path
-    return None
+        try:
+            r = _get_with_retry("https://pixabay.com/api/",
+                                {"key": STOCK_KEY, "q": q, "image_type": "photo", "orientation": "horizontal",
+                                 "per_page": 30, "safesearch": "true", "min_width": 1000})
+            hits = [h for h in r.json().get("hits", []) if str(h.get("id")) not in used]
+            random.shuffle(hits)
+            for h in hits[:6]:
+                url = h.get("largeImageURL") or h.get("webformatURL")
+                if not url:
+                    continue
+                with requests.get(url, stream=True, timeout=60) as dl:
+                    dl.raise_for_status()
+                    with open(path, "wb") as out:
+                        for chunk in dl.iter_content(1 << 20):
+                            out.write(chunk)
+                Image.open(path).convert("RGB").save(path, quality=92)  # fail here if the file is not a real image
+                used.add(str(h["id"]))
+                with open(USED_IMGS, "a", encoding="utf-8") as f:
+                    f.write(str(h["id"]) + "\n")
+                return path
+        except Exception as e:
+            print("Image search failed for", q, "->", e)
+    print("No photo for", query, "- using a color card")
+    return _fallback_photo(path, col)
 
 
-def safe_clip(query, i, used):
-    try:
-        return get_clip(query, i, used)
-    except Exception as e:
-        print("Clip search failed for", query, "->", e)
-        return None
-
-
-def fit(clip, dur):
-    clip = clip.without_audio()
-    s = max(W / clip.w, H / clip.h) * 1.01
-    clip = clip.resize(s)
-    clip = clip.crop(x_center=clip.w / 2, y_center=clip.h / 2, width=W, height=H)
-    if clip.duration < dur:
-        clip = clip.fx(vfx.loop, duration=dur)
-    return clip.subclip(0, dur)
-
-
-# ---------------------------------------------------------------- text overlays
+# ---------------------------------------------------------------- drawing
 def _font(size):
     for p in FONT_PATHS:
         if os.path.exists(p):
-            return ImageFont.truetype(p, size, layout_engine=_layout())
+            return ImageFont.truetype(p, size)
     raise RuntimeError("No font found")
 
 
-def _caption_image(text):
-    font = _font(78)
-    img = Image.new("RGBA", (W, 420), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    lines, line = [], ""
-    for w in text.split():
-        test = (line + " " + w).strip()
-        if line and _tw(d, test, font) > W - 200:
+def _wrap(d, text, size, maxw, maxlines, maxh=10**6):
+    """Largest font (<= size) so that the text fits in maxlines lines of width maxw."""
+    while size >= 28:
+        font = _font(size)
+        lines, line = [], ""
+        for w in text.split():
+            test = (line + " " + w).strip()
+            if line and d.textlength(test, font=font) > maxw:
+                lines.append(line)
+                line = w
+            else:
+                line = test
+        if line:
             lines.append(line)
-            line = w
-        else:
-            line = test
-    if line:
-        lines.append(line)
-    lh = 100
-    y = (420 - lh * len(lines)) // 2
+        if (len(lines) <= maxlines and len(lines) * int(size * 1.18) <= maxh
+                and all(d.textlength(l, font=font) <= maxw for l in lines)):
+            return font, lines, size
+        size -= 4
+    font = _font(28)
+    return font, text.split(), 28
+
+
+def _text_block(text, width, height, size, color, maxlines=3, stroke=6, bg=None):
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    if bg:
+        d.rounded_rectangle([0, 0, width - 1, height - 1], radius=36, fill=bg)
+    font, lines, size = _wrap(d, text, size, width - 90, maxlines, height - 24)
+    lh = int(size * 1.18)
+    y = (height - lh * len(lines)) // 2
     for ln in lines:
-        tw = _tw(d, ln, font)
-        _draw(d, ((W - tw) / 2, y), ln, font, fill=(255, 255, 255, 255),
-              stroke_width=8, stroke_fill=(0, 0, 0, 255))
+        tw = d.textlength(ln, font=font)
+        d.text(((width - tw) / 2, y), ln, font=font, fill=color, stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
         y += lh
     return np.array(img)
 
 
-def _text_image(text, size, height, color, stroke=4):
-    font = _font(size)
-    img = Image.new("RGBA", (W, height), (0, 0, 0, 0))
+PH = 680                    # panel height
+PA_Y, PB_Y = 270, 970       # panel tops
+PW = 960                    # panel width
+PX = (W - PW) // 2
+
+
+def _panel_image(photo, col):
+    """Photo cropped to the panel, with a colored frame."""
+    im = Image.open(photo).convert("RGB")
+    s = max((PW + 60) / im.width, (PH + 60) / im.height)   # a little bigger than the panel so a slow zoom has room
+    im = im.resize((int(im.width * s), int(im.height * s)), Image.LANCZOS)
+    return np.array(im)
+
+
+def _frame_image(col, letter):
+    img = Image.new("RGBA", (PW, PH), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    tw = _tw(d, text, font)
-    _draw(d, ((W - tw) / 2, (height - size) / 2 - 8), text, font, fill=color,
-          stroke_width=stroke, stroke_fill=(0, 0, 0, 230))
+    d.rounded_rectangle([0, 0, PW - 1, PH - 1], radius=40, outline=col + (255,), width=14)
+    d.ellipse([22, 22, 142, 142], fill=col + (255,), outline=(255, 255, 255, 255), width=6)
+    f = _font(88)
+    tw = d.textlength(letter, font=f)
+    d.text((82 - tw / 2, 82 - 52), letter, font=f, fill=(255, 255, 255, 255))
     return np.array(img)
 
 
-def _digit_image(n, size=480):
-    font = _font(size)
-    img = Image.new("RGBA", (W, 620), (0, 0, 0, 0))
+def _rounded_mask(w, h, r=40):
+    m = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(m).rounded_rectangle([0, 0, w - 1, h - 1], radius=r, fill=255)
+    return np.array(m).astype(float) / 255.0
+
+
+def _bg_image():
+    ys = np.linspace(0, 1, H)[:, None]
+    top, bot = np.array([18, 10, 46]), np.array([46, 20, 92])
+    arr = (top[None, None, :] * (1 - ys[:, :, None]) + bot[None, None, :] * ys[:, :, None])
+    arr = np.repeat(arr, W, axis=1).astype(np.uint8)
+    Image.fromarray(arr).save("bg_fr.png")
+    return "bg_fr.png"
+
+
+def _digit_image(n):
+    f = _font(520)
+    img = Image.new("RGBA", (W, 640), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     s = str(n)
-    tw = d.textlength(s, font=font, direction="ltr") if HAS_RAQM else d.textlength(s, font=font)
-    d.text(((W - tw) / 2, 20), s, font=font, fill=(255, 159, 28, 255),
-           stroke_width=14, stroke_fill=(0, 0, 0, 255))
+    tw = d.textlength(s, font=f)
+    d.text(((W - tw) / 2, 10), s, font=f, fill=(255, 214, 10, 255), stroke_width=16, stroke_fill=(0, 0, 0, 255))
     return np.array(img)
-
-
-def _brand_image():
-    return _text_image(BRAND, 46, 95, (255, 159, 28, 235), stroke=3)
-
-
-def _episode_image(n):
-    return _text_image(f"تحدي رقم {n}", 42, 95, (255, 255, 255, 235), stroke=4)
-
-
-def _cta_image():
-    return _text_image("تابعنا لتحدٍّ جديد كل يوم", 54, 115, (255, 255, 255, 255), stroke=5)
-
-
-def build_overlays(video, timeline, episode=None, answer=None):
-    """Dark layer, brand tag, captions (3 words at a time, synced per scene), countdown digits, end card."""
-    try:
-        total = video.duration
-        layers = [video,
-                  ColorClip((W, H), color=(0, 0, 0)).set_opacity(0.30).set_duration(total),
-                  ImageClip(_brand_image()).set_duration(total).set_position(("center", 150))]
-        if episode:
-            layers.append(ImageClip(_episode_image(episode)).set_duration(total).set_position(("center", 245)))
-        for start, adur, sc in timeline:
-            if sc["kind"] == "countdown":
-                step = countdown_step(adur)
-                for k, n in enumerate([5, 4, 3, 2, 1]):
-                    layers.append(ImageClip(_digit_image(n)).set_start(start + k * step).set_duration(step)
-                                  .set_position(("center", 560)))
-                continue
-            if sc["kind"] == "reveal" and answer:
-                size = 480 if len(answer) <= 3 else max(150, int(480 * 3 / len(answer)))
-                layers.append(ImageClip(_digit_image(answer, size)).set_start(start).set_duration(adur + 0.3)
-                              .set_position(("center", 560)))
-            ws = sc["line"].split()
-            parts = [" ".join(ws[i:i + 3]) for i in range(0, len(ws), 3)]
-            tot = sum(len(p) for p in parts) or 1
-            t = start
-            for p in parts:
-                d = adur * len(p) / tot
-                layers.append(ImageClip(_caption_image(p)).set_start(t).set_duration(d)
-                              .set_position(("center", 1080)))
-                t += d
-        if total > 6:
-            layers.append(ImageClip(_cta_image()).set_start(total - 2.2).set_duration(2.2)
-                          .set_position(("center", 350)))
-        return CompositeVideoClip(layers).set_duration(total).set_audio(video.audio)
-    except Exception as e:
-        print("Overlays skipped:", e)
-        return video
 
 
 # ---------------------------------------------------------------- build
-def _brand_bg(mark=True):
-    """Own background (navy gradient + faint question marks) for the countdown and end scenes."""
-    img = Image.new("RGB", (W, H))
-    px = ImageDraw.Draw(img)
-    for y in range(H):
-        k = y / H
-        px.line([(0, y), (W, y)], fill=(int(12 + 20 * k), int(20 + 30 * k), int(52 + 40 * k)))
-    d = ImageDraw.Draw(img, "RGBA")
-    try:
-        f = _font(520)
-    except Exception:
-        f = ImageFont.load_default()
-    if mark:
-        d.text((W // 2, H // 2), "?", font=f, fill=(255, 190, 40, 38), anchor="mm")
-    name = "brand_bg.png" if mark else "brand_bg_plain.png"
-    img.save(name)
-    return name
+def panel_clip(photo, col, dur, zoom):
+    arr = _panel_image(photo, col)
+    base = ImageClip(arr)
+    if zoom:
+        base = base.resize(lambda t: 1.0 + 0.035 * t)
+    inner = CompositeVideoClip([base.set_position("center")], size=(PW, PH)).set_duration(dur)
+    mask = ImageClip(_rounded_mask(PW, PH), ismask=True).set_duration(dur)
+    return inner.set_mask(mask)
 
 
-def _answer_text(meta):
-    """Numeric answer as clean text for math riddles (shown big on a plain card), else None."""
-    v = meta.get("answer_number")
-    if v is None:
-        return None
-    try:
-        f = float(v)
-    except Exception:
-        return None
-    txt = str(int(f)) if f == int(f) else str(round(f, 2))
-    return txt if len(txt) <= 7 else None
+def build_video(meta, zoom=True):
+    a, b = meta["a"], meta["b"]
+    lines = ["Tu préfères...", a + "...", "ou " + b + " ?", meta["cta"]]
+    paths = asyncio.run(_tts_all(lines))
+    auds = [AudioFileClip(p) for p in paths]
+    used = set(read_lines(USED_IMGS, 4000))
+    photo_a = get_image(meta["keyword_a"], 0, used, COL_A)
+    photo_b = get_image(meta["keyword_b"], 1, used, COL_B)
 
+    # timeline
+    t_hook = 0.0
+    d_hook = auds[0].duration + 0.15
+    t_a = t_hook + d_hook
+    d_a = auds[1].duration + 0.35
+    t_b = t_a + d_a
+    d_b = auds[2].duration + 0.9
+    t_cd = t_b + d_b
+    d_cd = 3.0
+    t_cta = t_cd + d_cd
+    d_cta = auds[3].duration + 1.0
+    total = t_cta + d_cta
 
-def build_video(meta):
-    scenes = meta["scenes"]
-    paths = asyncio.run(_tts_all(scenes))
-    used = set(read_lines(USED_CLIPS, 2000))
-    voices, clips, timeline, t, last = [], [], [], 0.0, None
-    for i, (sc, vp) in enumerate(zip(scenes, paths)):
-        a = AudioFileClip(vp)
-        dur = a.duration + 0.3
-        if sc["kind"] == "countdown":
-            dur = max(dur, 4.5)  # leave real suspense time
-        voices.append(a.set_start(t))
-        timeline.append((t, a.duration, sc))
-        ans = _answer_text(meta)
-        if sc["kind"] in ("countdown", "cta") or (sc["kind"] == "reveal" and ans):
-            clips.append(ImageClip(_brand_bg(mark=sc["kind"] == "cta")).set_duration(dur))
-            t += dur
-            continue
-        p = safe_clip(sc["keyword"], i, used) or last
-        if not p:
-            raise RuntimeError("No stock clips found")
-        last = p
-        clips.append(fit(VideoFileClip(p), dur))
-        t += dur
-    total = t
+    voices = [auds[0].set_start(t_hook), auds[1].set_start(t_a + 0.1),
+              auds[2].set_start(t_b + 0.1), auds[3].set_start(t_cta + 0.2)]
     voice = CompositeAudioClip(voices).set_duration(total)
     mix = add_music(voice, total)
     try:
-        ticks, ding = [], None
-        for st, adur, sc in timeline:
-            if sc["kind"] == "countdown":
-                ticks = [st + k * countdown_step(adur) for k in range(5)]
-            elif sc["kind"] == "reveal":
-                ding = st
-        sfx = AudioFileClip(make_sfx(total, ticks, ding)).subclip(0, total).fx(afx.volumex, 0.5)
-        mix = CompositeAudioClip([mix, sfx]).set_duration(total)
+        sfx = AudioFileClip(make_sfx(total, [t_cd + k for k in range(3)], [t_a, t_b], t_cta)).subclip(0, total)
+        mix = CompositeAudioClip([mix, sfx.fx(afx.volumex, 0.5)]).set_duration(total)
     except Exception as e:
         print("Sound effects skipped:", e)
-    video = concatenate_videoclips(clips).set_audio(mix)
-    video = build_overlays(video, timeline, meta.get("episode"), _answer_text(meta))
+
+    layers = [ImageClip(_bg_image()).set_duration(total)]
+    # header: big in the center during the hook, small at the top afterwards
+    big = _text_block("TU PRÉFÈRES ?", W, 330, 130, (255, 255, 255, 255), maxlines=2, stroke=9)
+    layers.append(ImageClip(big).set_start(0).set_duration(d_hook).set_position(("center", 790)))
+    head = _text_block("TU PRÉFÈRES ?", W, 130, 90, (255, 255, 255, 255), maxlines=1, stroke=7)
+    layers.append(ImageClip(head).set_start(d_hook).set_duration(total - d_hook).set_position(("center", 95)))
+    ep = _text_block(f"Choix n°{meta['episode']}", 500, 70, 40, (255, 214, 10, 255), maxlines=1, stroke=4)
+    layers.append(ImageClip(ep).set_start(d_hook).set_duration(total - d_hook).set_position(("center", 205)))
+
+    for (ph, col, letter, y, t0, txt) in ((photo_a, COL_A, "A", PA_Y, t_a, a), (photo_b, COL_B, "B", PB_Y, t_b, b)):
+        dur = total - t0
+        layers.append(panel_clip(ph, col, dur, zoom).set_start(t0).set_position((PX, y)).crossfadein(0.2))
+        layers.append(ImageClip(_frame_image(col, letter)).set_start(t0).set_duration(dur).set_position((PX, y)))
+        label = _text_block(txt[:1].upper() + txt[1:], PW - 80, 190, 62, (255, 255, 255, 255), maxlines=3, stroke=6,
+                            bg=(0, 0, 0, 165))
+        layers.append(ImageClip(label).set_start(t0 + 0.1).set_duration(dur - 0.1)
+                      .set_position((PX + 40, y + PH - 215)))
+
+    # countdown over the panels
+    for k, n in enumerate([3, 2, 1]):
+        layers.append(ImageClip(_digit_image(n)).set_start(t_cd + k).set_duration(1.0).set_position(("center", 650)))
+    # end card pill on the seam between the two panels
+    pill = _text_block(meta["cta"], 940, 190, 58, (255, 255, 255, 255), maxlines=2, stroke=5, bg=(20, 10, 46, 235))
+    layers.append(ImageClip(pill).set_start(t_cta).set_duration(d_cta).set_position(("center", 865)))
+
+    video = CompositeVideoClip(layers, size=(W, H)).set_duration(total).set_audio(mix)
     video.write_videofile("out.mp4", fps=30, codec="libx264", audio_codec="aac",
                           audio_bitrate="192k", preset="veryfast", threads=2, logger=None,
-                          ffmpeg_params=["-crf", "19", "-pix_fmt", "yuv420p", "-movflags", "+faststart"])
+                          ffmpeg_params=["-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart"])
     meta["audio_sec"] = round(total, 1)
     return "out.mp4"
 
@@ -786,17 +572,18 @@ def get_creds():
 
 def upload(path, meta, creds):
     yt = build("youtube", "v3", credentials=creds)
+    desc = (f"Tu préfères {meta['a']}, ou {meta['b']} ?\n\n"
+            "Réponds A ou B en commentaire, et dis-nous pourquoi !\n"
+            "Un nouveau choix impossible chaque jour : abonne-toi pour ne rien rater.\n\n"
+            "#Shorts #TuPréfères #Quiz #Choix")
     body = {
         "snippet": {
-            "title": (meta["title"] + (f" | تحدي رقم {meta['episode']}" if meta.get("episode") else ""))[:95],
-            "description": ((f"تحدي رقم {meta['episode']}\n\n" if meta.get("episode") else "") + meta["script"]
-                            + "\n\nكم كانت إجابتك؟ اكتبها في التعليقات!"
-                            + "\nتحدٍّ جديد كل يوم. اشترك في القناة حتى لا يفوتك."
-                            + "\n\n#Shorts #تحدي #خمن #معلومات #معلومات_عامة"),
+            "title": meta["title"][:95],
+            "description": desc,
             "tags": meta["tags"],
             "categoryId": "24",
-            "defaultLanguage": "ar",
-            "defaultAudioLanguage": "ar",
+            "defaultLanguage": "fr",
+            "defaultAudioLanguage": "fr",
         },
         "status": {"privacyStatus": PRIVACY, "selfDeclaredMadeForKids": False},
     }
@@ -820,24 +607,26 @@ def upload(path, meta, creds):
     return resp["id"]
 
 
+LOG_HEADER = ["date", "title", "category", "a", "b", "video_id", "views", "viewed_vs_swiped_pct", "avg_view_pct",
+              "likes", "comments", "subs_gained", "pinned_comment"]
+
+
 def write_log(meta, vid):
     """One row per video. Fill views / viewed_vs_swiped_pct / avg_view_pct / likes / comments / subs_gained by hand
-    from YouTube Studio (edit log.csv on GitHub). After 8+ filled rows the formats are weighted by results."""
+    from YouTube Studio (edit log.csv on GitHub)."""
     try:
         if os.path.exists(LOG):
             with open(LOG, encoding="utf-8", newline="") as f:
                 first = next(csv.reader(f), [])
             if first != LOG_HEADER:
-                os.replace(LOG, "log_old.csv")  # old layout kept, new file starts clean
+                os.replace(LOG, "log_old.csv")
         new = not os.path.exists(LOG)
         with open(LOG, "a", encoding="utf-8", newline="") as f:
             w = csv.writer(f)
             if new:
                 w.writerow(LOG_HEADER)
-            w.writerow([datetime.date.today().isoformat(), meta["title"], meta["fmt"], meta.get("subject", ""),
-                        meta["hook_line"], meta["cta_style"], len(meta["script"].split()), meta.get("audio_sec", ""),
-                        score_idea(meta), vid, "", "", "", "", "", "",
-                        " | ".join(meta.get("title_alts", [])), meta.get("pinned_comment", "")])
+            w.writerow([datetime.date.today().isoformat(), meta["title"], meta["category"], meta["a"], meta["b"],
+                        vid, "", "", "", "", "", "", meta.get("pinned_comment", "")])
     except Exception as e:
         print("Log skipped:", e)
 
@@ -849,20 +638,34 @@ def write_summary(meta, vid):
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(f"### {meta['title']}\nhttps://youtube.com/shorts/{vid}\n\n"
-                    f"- format: {meta['fmt']} | CTA style: {meta['cta_style']} | idea score: {score_idea(meta)}/8\n"
-                    f"- other titles: {' | '.join(meta.get('title_alts', []))}\n"
+                    f"- A: {meta['a']}\n- B: {meta['b']}\n- category: {meta['category']}\n"
                     f"- comment to pin by hand: {meta.get('pinned_comment', '')}\n")
     except Exception as e:
         print("Summary skipped:", e)
 
 
+def render(meta):
+    try:
+        return build_video(meta, zoom=True)
+    except Exception as e:
+        print("Render with zoom failed, retrying without zoom:", type(e).__name__, e)
+        return build_video(meta, zoom=False)
+
+
 if __name__ == "__main__":
+    if TEST:
+        meta = {"title": "Tu préfères vivre sans téléphone ou sans pizza ? 🍕", "a": "vivre un an sans téléphone",
+                "b": "ne plus jamais manger de pizza", "keyword_a": "smartphone", "keyword_b": "pizza",
+                "cta": "A ou B ? Dis-le en commentaire !", "tags": ["tu préfères"], "category": "test",
+                "episode": 1, "pinned_comment": ""}
+        print("Test render ->", render(meta))
+        raise SystemExit
     creds = get_creds()
     meta = make_script()
-    print("Title:", meta["title"], "| Format:", meta["concept"])
-    video_path = build_video(meta)
+    print("Title:", meta["title"], "| Category:", meta["category"])
+    video_path = render(meta)
     vid = upload(video_path, meta, creds)
     with open(HISTORY, "a", encoding="utf-8") as f:
-        f.write(SEP.join([meta["title"], meta["concept"], meta["hook_line"], meta["answer"], meta["cta_style"]]) + "\n")
+        f.write(SEP.join([meta["title"], meta["category"], meta["a"], meta["b"]]) + "\n")
     write_log(meta, vid)
     write_summary(meta, vid)
