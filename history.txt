@@ -52,3 +52,4 @@ Why You Always Finish Projects Later Than Expected || planning fallacy || Ever f
 خمن الدولة في 5 ثوانٍ فقط! || guess_country || تحدي الدول: هل تحزر الاسم في 5 ثوانٍ؟ || البرازيل || score_comment
 تحدي في 5 ثوانٍ: أي لون للمرآة؟ || what_next || هل تعرف اللون الحقيقي للمرآة في 5 ثوانٍ؟ || الأخضر || replay
 هل تعرف الكائن بدون معدة؟ || true_false || صحيح أم خطأ: كائن بحري بلا معدة في 5 ثوانٍ؟ || خيار البحر || subscribe_next
+هل تعرف الدولة التي ليس لها عاصمة؟ || only_first || أي دولة لا تملك عاصمة في 5 ثوانٍ؟ || دولة ناورو || score_comment
