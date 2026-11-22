@@ -55,3 +55,4 @@ Why You Always Finish Projects Later Than Expected || planning fallacy || Ever f
 هل تعرف الدولة التي ليس لها عاصمة؟ || only_first || أي دولة لا تملك عاصمة في 5 ثوانٍ؟ || دولة ناورو || score_comment
 هل تعرف أثقل كرة في الرياضات الشهيرة؟ || guess_fact || هل تحزر الكرة الأثقل وزناً في 5 ثوانٍ؟ || البولينج || tag_friend
 هل تعلم كيف يسمع الفيل؟ || true_false || هل تسمع الفيلة بغير أذنيها في 5 ثوانٍ؟ || صحيح || replay
+هل تعرف الحيوان الذي لا يمشي أبداً؟ || only_first || خمن الحيوان الذي لا يعرف المشي أبداً؟ || حيوان الكسلان || subscribe_next
