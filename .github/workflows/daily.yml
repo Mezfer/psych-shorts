@@ -4,7 +4,6 @@ on:
   schedule:
     - cron: "7 12 * * *"
     - cron: "23 17 * * *"
-    - cron: "41 21 * * *"
   workflow_dispatch:
 
 permissions:
@@ -35,7 +34,14 @@ jobs:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-        run: python main.py
+        run: |
+          if [ $(( ${{ github.run_number }} % 2 )) -eq 0 ]; then
+            echo "Format: game"
+            python game.py
+          else
+            echo "Format: facts"
+            python main.py
+          fi
 
       - name: Save history
         if: always()
