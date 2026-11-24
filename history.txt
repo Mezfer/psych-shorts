@@ -62,3 +62,4 @@ Why You Always Finish Projects Later Than Expected || planning fallacy || Ever f
 تحدّي الأعلام والعواصم: هل تصل إلى المستوى الصعب؟ || game_الأعلام والعواصم || ما هي عاصمة تونس؟ || capital:تونس؛flag:نيوزيلندا؛capital:بوتان || subscribe_next
 تحدي من هو أول إنسان صعد إلى الفضاء؟ || only_first || خمن في 5 ثوانٍ: من أول إنسان صعد للفضاء؟ || يوري غاغارين || score_comment
 ثلاثة أسئلة: سهل ومتوسط وصعب! هل تنجح في الأعلام والعواصم؟ || game_الأعلام والعواصم || ما هي عاصمة مصر؟ || capital:مصر؛capital:إثيوبيا؛flag:بوتان || tag_friend
+هل تعرف الدولة التي تشبه الحذاء؟ || guess_country || خمن الدولة التي تشبه الحذاء في 5 ثوانٍ؟ || إيطاليا || subscribe_next
